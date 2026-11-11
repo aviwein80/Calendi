@@ -11,7 +11,7 @@ import { listEventTypes } from '@/lib/store';
 
 // The owner's landing page: who they are and what can be booked.
 
-const SETUP_PROBLEMS = ['database_missing', 'secret_missing', 'database_empty'];
+const SETUP_PROBLEMS = ['database_missing', 'secret_missing', 'setup_token_missing', 'database_empty'];
 
 export default function HomePage() {
   return (

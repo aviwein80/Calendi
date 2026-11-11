@@ -5,8 +5,9 @@ import { Suspense } from 'react';
 import { Booker } from '@/components/Booker';
 import { PublicFrame, PublicMessage, PublicSkeleton } from '@/components/PublicFrame';
 import { brandStyle } from '@/components/ui';
+import { BLOCKED_MESSAGE, findBookingByLink } from '@/lib/manage';
 import { hasStarted, publicEventType, publicOwner } from '@/lib/public';
-import { getBookingByToken, getEventType, getOwner } from '@/lib/store';
+import { getEventType, getOwner } from '@/lib/store';
 
 export const metadata: Metadata = { title: 'Reschedule meeting', robots: { index: false } };
 
@@ -26,10 +27,14 @@ export default function ReschedulePage(props: PageProps<'/booking/[token]/resche
 async function Content({ params }: PageProps<'/booking/[token]/reschedule'>) {
   await connection();
   const { token } = await params;
-  const [booking, owner] = await Promise.all([getBookingByToken(token), getOwner()]);
-  if (!booking || !owner) {
+  const [lookup, owner] = await Promise.all([findBookingByLink(token), getOwner()]);
+  if (lookup.status === 'blocked') {
+    return <PublicMessage title="Too many attempts">{BLOCKED_MESSAGE}</PublicMessage>;
+  }
+  if (lookup.status !== 'found' || !owner) {
     return <PublicMessage title="Booking not found">This link may be incomplete or out of date.</PublicMessage>;
   }
+  const booking = lookup.booking;
   if (booking.status !== 'confirmed' || hasStarted(booking)) {
     redirect(`/booking/${booking.token}`);
   }

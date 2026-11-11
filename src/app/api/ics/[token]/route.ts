@@ -1,13 +1,18 @@
 import type { NextRequest } from 'next/server';
 import { buildIcs } from '@/lib/calendars/icsBuild';
-import { getBookingByToken, getOwner } from '@/lib/store';
+import { BLOCKED_MESSAGE, findBookingByLink } from '@/lib/manage';
+import { getOwner } from '@/lib/store';
 
 // GET /api/ics/<booking token>: the booking as a downloadable .ics file.
 
 export async function GET(_request: NextRequest, context: RouteContext<'/api/ics/[token]'>): Promise<Response> {
   const { token } = await context.params;
-  const [booking, owner] = await Promise.all([getBookingByToken(token), getOwner()]);
-  if (!booking || !owner) return new Response('Not found', { status: 404 });
+  const [lookup, owner] = await Promise.all([findBookingByLink(token), getOwner()]);
+  if (lookup.status === 'blocked') {
+    return new Response(BLOCKED_MESSAGE, { status: 429, headers: { 'Retry-After': String(lookup.retryAfterSeconds) } });
+  }
+  if (lookup.status !== 'found' || !owner) return new Response('Not found', { status: 404 });
+  const booking = lookup.booking;
 
   const ics = buildIcs({
     uid: `${booking.id}@calendi`,

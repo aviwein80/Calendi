@@ -131,6 +131,7 @@ async function portFree(port) {
   start('app', 'node', ['node_modules/next/dist/bin/next', 'start', '-p', PORT], {
     DATABASE_URL,
     APP_SECRET: 'end-to-end-test-secret-0123456789abcdef',
+    SETUP_TOKEN: 'e2e-setup-token-0123456789abcdef',
     APP_URL: '',
     CALENDAR_CACHE_SECONDS: '0',
     GOOGLE_AUTH_URL: 'http://localhost:4002/auth',

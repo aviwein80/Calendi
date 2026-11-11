@@ -38,12 +38,20 @@ else just books.
 
 **What keeps it honest**
 
-- Two people can never get the same slot: the database itself refuses overlapping bookings.
+- Two people can never get the same slot: the database itself refuses overlapping
+  bookings, and bookings that would break the free time you keep around meetings,
+  even when two people book at the same instant.
 - A slot is re-checked against your live calendars at the moment of booking.
 - If a connected calendar cannot be read, booking pauses with a clear message
   (and the admin tells you which calendar) rather than offering times that
   might be taken.
 - Calendar passwords, tokens and API keys are encrypted before they are stored.
+- Nobody can claim a freshly deployed site without the setup token you chose.
+- The secret links invitees use to reschedule or cancel are stored only as a
+  hash (plus an encrypted copy for your admin), so a copy of the database is not
+  enough to act on anyone's booking.
+- Booking, cancelling, rescheduling, loading times and signing in are each
+  limited per network address, and guessing at booking links is cut off.
 
 ## Putting it online
 
@@ -53,13 +61,16 @@ any Node host and any Postgres work the same way.
 
 1. **Import this repository into Vercel** (New Project → pick the repo). Leave the build settings alone. Vercel deploys straight away; at this point the site shows an "Almost there" page listing what it still needs, which is the next two steps.
 2. **Add a database.** In the Vercel project: Storage → Create Database → Supabase or Neon → connect it to the project. That sets the database address for you. (Using a database you already have? Add its connection string as `DATABASE_URL` instead.)
-3. **Add one setting.** Project → Settings → Environment Variables → add `APP_SECRET` with a long random value of at least 32 characters. A password manager's generator works, or:
+3. **Add two settings.** Project → Settings → Environment Variables:
+   - `APP_SECRET`: a long random value of at least 32 characters. Keep it. Everything encrypted in the database is locked with this value; if it changes, calendars have to be reconnected.
+   - `SETUP_TOKEN`: another random value, at least 24 characters. This is what proves the site is yours when you create your account. Keep it somewhere you can copy it from in step 5.
+
+   A password manager's generator works for both, or run this once for each:
    ```bash
    openssl rand -base64 32
    ```
-   Keep it. Everything encrypted in the database is locked with this value; if it changes, calendars have to be reconnected.
 4. **Redeploy** (Deployments → the ⋯ menu on the latest one → Redeploy). Settings only take effect on a new deployment, and the database tables are created during the build.
-5. **Open the site and create your account straight away.** Until an account exists, the first person to open the setup page becomes the owner.
+5. **Open the site and create your account**, pasting the `SETUP_TOKEN` value into the first field. The first person to submit that form with the right token becomes the owner, and after that setup is closed for good. Without the token nobody can claim the site, so there is no rush, but do not share it. Once your account exists you can delete the `SETUP_TOKEN` setting.
 6. **Connect your calendars** under Calendars (each option shows its own steps), then check your hours under Availability.
 7. Optional: turn on email and the webhook under Settings. If you add a custom domain, set `APP_URL` to it (for example `https://meet.example.com`) so links in emails and calendar entries use that address.
 
@@ -79,20 +90,36 @@ If something is still missing or the database cannot be reached, `/admin/setup` 
 
 ### Settings reference
 
-Only the first two are required. The rest can be entered in the admin instead
-(where they are stored encrypted); a value set here wins.
+The first two are always required, and `SETUP_TOKEN` until your account
+exists. The rest can be entered in the admin instead (where they are stored
+encrypted); a value set here wins.
 
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Postgres connection string. `POSTGRES_URL` (set by Vercel's database integrations) is used if this is absent. |
 | `APP_SECRET` | At least 32 characters. Signs sessions and encrypts stored credentials. |
+| `SETUP_TOKEN` | At least 24 characters. Must be typed on the setup form to create the owner account. Not needed afterwards. |
 | `APP_URL` | Public address, if it should not be taken from the request (custom domains). |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google app registration. |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID` | Microsoft app registration (tenant only for single-organisation apps). |
 | `RESEND_API_KEY` or `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, plus `EMAIL_FROM` | Outgoing email. |
+| `MIGRATE_ON_PREVIEW` | Set to `1` only if Vercel preview deployments have a database of their own. By default previews never change the database (see below). |
 | `CALENDAR_CACHE_SECONDS` | How long calendar lookups are remembered while people browse (default 60, 0 to disable). Booking always re-checks. |
 
 ## Good to know
+
+- **Limits per visitor.** From one network address: 8 bookings, 10
+  cancellations and 10 reschedules an hour; 60 look-ups of available times a
+  minute; 5 sign-in attempts per 15 minutes; and 10 booking links that do not
+  exist per 15 minutes. Over the limit, the visitor is told to wait (HTTP 429).
+  There is also an overall cap of 40 new bookings an hour. The numbers live in
+  `src/lib/rateLimit.ts`. The visitor's address comes from the host: Vercel
+  provides it reliably; behind your own proxy, make sure it sets `X-Real-IP`.
+- **Preview deployments do not touch the database.** Vercel builds a preview
+  for every branch, usually against the same database as the live site.
+  Database changes are applied only by production builds, so an unmerged
+  branch cannot change the tables under the live site. A preview of a branch
+  that needs new tables may therefore not work until it is merged.
 
 - **Cancel from Calendi, not from your calendar.** Deleting a booking's entry
   directly in Google or Outlook does not cancel the booking here, so the slot
@@ -100,8 +127,9 @@ Only the first two are required. The rest can be entered in the admin instead
 - **Who emails the invitee?** When bookings are saved to Google or Outlook,
   that calendar sends the invitation and any updates. Otherwise Calendi's own
   email does, so turn email on under Settings if you use iCloud or links only.
-- **Lost the password?** There is no reset email. Clear the account's lock or
-  replace the password hash in the `owner` table, or ask a developer to.
+- **Lost the password?** There is no reset email. Replace the password hash
+  in the `owner` table, or ask a developer to. Sign-in also pauses for 15
+  minutes after 8 wrong passwords in a row.
 - **Not included:** teams and round-robin, group events, payments, SMS,
   reminder workflows, and Zoom's own integration (use a personal Zoom room link
   as the location instead).
@@ -142,6 +170,7 @@ npm run test:e2e
 
 `npm test` covers the scheduling engine and calendar parsing. `npm run test:e2e`
 drives a real browser through every flow against stand-ins for Google,
-Microsoft, CalDAV, email and webhooks; see `tests/e2e/README.md` for what it needs.
+Microsoft, CalDAV, email and webhooks; see `tests/e2e/README.md` for what it
+needs. Both run on every push (`.github/workflows/ci.yml`).
 
 How the code is organised, and the rules it follows, are in `CLAUDE.md`.

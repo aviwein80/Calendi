@@ -2,6 +2,9 @@
 
 export const MIN_PASSWORD_LENGTH = 10;
 
+/** SETUP_TOKEN must be at least this long before setup will accept it. */
+export const MIN_SETUP_TOKEN_LENGTH = 24;
+
 /** Paths the app itself uses, so an event type can never be given one as its link. */
 export const RESERVED_SLUGS = new Set([
   'admin',

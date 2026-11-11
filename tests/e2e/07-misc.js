@@ -1,7 +1,7 @@
 // Everything else: two people racing for one slot, another time zone on a
 // phone, secret and switched-off links, prefill and embed, editing hours,
 // branding, SMTP email, and sign-in security.
-const { chromium, BASE, D, OWNER, utc, check, finish, daySlots, mock, sql, reset, admin, visitor, book, pickDay, offered, shot } = require('./lib');
+const { chromium, BASE, D, OWNER, utc, check, finish, daySlots, mock, sql, reset, admin, visitor, book, pickDay, offered, shot, api } = require('./lib');
 
 (async () => {
   await reset();
@@ -32,7 +32,7 @@ const { chromium, BASE, D, OWNER, utc, check, finish, daySlots, mock, sql, reset
   try {
     const start = D.mon2.at('09:15').toUTC().toISO();
     const end = D.mon2.at('09:45').toUTC().toISO();
-    sql(`insert into bookings (token, event_name, start_at, end_at, invitee_name, invitee_email, invitee_timezone) values ('x', 'x', '${start}', '${end}', 'x', 'x@x.co', 'UTC')`);
+    sql(`insert into bookings (token_hash, event_name, start_at, end_at, invitee_name, invitee_email, invitee_timezone) values ('x', 'x', '${start}', '${end}', 'x', 'x@x.co', 'UTC')`);
   } catch {
     refused = true;
   }
@@ -177,14 +177,15 @@ const { chromium, BASE, D, OWNER, utc, check, finish, daySlots, mock, sql, reset
   await out.page.click('button[type=submit]');
   await out.page.waitForSelector('text=do not match');
   check('a wrong password is refused; the email stays in the form', (await out.page.inputValue('#email')) === OWNER.email);
+  // The account locks after 8 wrong passwords in total. One network address
+  // is cut off after 5 tries (see 09-security), so this takes several addresses.
   for (let i = 0; i < 7; i++) {
-    await out.page.fill('#password', `wrong-password-${i + 2}`);
-    await out.page.click('button[type=submit]');
-    await out.page.waitForTimeout(350);
+    const reply = await api('/api/auth/login', { address: `10.7.0.${i + 1}`, json: { email: OWNER.email, password: `wrong-password-${i + 2}` } });
+    if (reply.status !== 401) check('wrong password answered with 401', false, String(reply.status));
   }
   await out.page.fill('#password', OWNER.password);
   await out.page.click('button[type=submit]');
-  await out.page.waitForSelector('text=Too many attempts');
+  await out.page.waitForSelector('text=Too many attempts. Try again in');
   check('after 8 wrong tries sign-in is locked for a while, even with the right password', true);
   sql('update owner set locked_until = null, failed_logins = 0');
   await out.page.click('button[type=submit]');

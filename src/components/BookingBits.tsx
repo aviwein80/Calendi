@@ -6,7 +6,7 @@ import { hostCancelAction } from '@/app/actions/admin';
 import { Button, Notice, Textarea } from './ui';
 
 /** "Cancel booking" for the owner: asks for an optional reason first. */
-export function HostCancel({ token, invitee }: { token: string; invitee: string }) {
+export function HostCancel({ bookingId, invitee }: { bookingId: string; invitee: string }) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
@@ -21,11 +21,11 @@ export function HostCancel({ token, invitee }: { token: string; invitee: string 
   }
   return (
     <div className="w-full space-y-2 rounded-lg border border-zinc-200 p-3">
-      <label htmlFor={`reason-${token}`} className="block text-sm font-medium text-zinc-800">
+      <label htmlFor={`reason-${bookingId}`} className="block text-sm font-medium text-zinc-800">
         Reason for {invitee} (optional)
       </label>
       <Textarea
-        id={`reason-${token}`}
+        id={`reason-${bookingId}`}
         value={reason}
         maxLength={1000}
         className="min-h-16"
@@ -40,7 +40,7 @@ export function HostCancel({ token, invitee }: { token: string; invitee: string 
           disabled={pending}
           onClick={() =>
             startTransition(async () => {
-              const result = await hostCancelAction(token, reason);
+              const result = await hostCancelAction(bookingId, reason);
               if (result.error) setError(result.error);
               else setOpen(false);
             })

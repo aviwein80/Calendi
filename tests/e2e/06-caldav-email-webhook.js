@@ -3,7 +3,7 @@
 // invitations themselves, this is also where Calendi's own emails and the
 // webhook are checked, along with custom questions, guests and buffers.
 const crypto = require('crypto');
-const { chromium, BASE, D, compact, icsLocal, check, finish, daySlots, mock, sql, reset, admin, visitor, book, pickDay, offered, shot } = require('./lib');
+const { chromium, BASE, D, compact, icsLocal, check, finish, daySlots, mock, sql, reset, admin, visitor, book, pickDay, offered, shot, tokenHash } = require('./lib');
 
 const CALDAV = process.env.E2E_CALDAV_URL || 'http://127.0.0.1:5232';
 const dav = (method, path, body) =>
@@ -119,12 +119,12 @@ const vevent = (lines) =>
     },
   });
   await guest.page.waitForSelector('text=A confirmation has been sent to jane@example.com');
-  const id = sql(`select id from bookings where token='${token}'`);
+  const id = sql(`select id from bookings where token_hash='${tokenHash(token)}'`);
   const saved = await dav('GET', `/avi/work/${id}.ics`);
   const ics = await saved.text();
   check('the booking is saved into the CalDAV calendar', saved.status === 200 && ics.includes(`DTSTART:${compact(D.fri.at('10:00'))}`) && ics.includes(`DTEND:${compact(D.fri.at('10:45'))}`), ics.slice(0, 300));
   check('the calendar entry has the details but no attendee lines', ics.includes('SUMMARY:Discovery Call: Jane Invitee and Avi Tester') && ics.replace(/\r\n /g, '').includes('Marketing automation') && !ics.includes('ATTENDEE'));
-  check('guest list excludes the invitee themself; phone is kept', sql(`select invited_by_calendar::text || '|' || guests::text || '|' || invitee_phone || '|' || sync_error from bookings where token='${token}'`) === 'false|["bob@example.com"]|+1 (410) 555-0100|');
+  check('guest list excludes the invitee themself; phone is kept', sql(`select invited_by_calendar::text || '|' || guests::text || '|' || invitee_phone || '|' || sync_error from bookings where token_hash='${tokenHash(token)}'`) === 'false|["bob@example.com"]|+1 (410) 555-0100|');
   state = await mock('/state');
   const toInvitee = state.emails.find((m) => m.to.includes('jane@example.com'));
   const toOwner = state.emails.find((m) => m.subject === 'New booking: Jane Invitee');

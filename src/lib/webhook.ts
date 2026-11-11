@@ -33,7 +33,8 @@ export function bookingPayload(booking: Booking, baseUrl: string) {
     meeting_url: booking.meeting_url,
     cancel_reason: booking.cancel_reason,
     cancelled_by: booking.cancelled_by,
-    manage_url: `${baseUrl}/booking/${booking.token}`,
+    // Null for bookings whose link can no longer be shown (see store.ts).
+    manage_url: booking.token ? `${baseUrl}/booking/${booking.token}` : null,
     created_at: booking.created_at.toISOString(),
   };
 }

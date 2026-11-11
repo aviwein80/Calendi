@@ -2,6 +2,7 @@ import 'server-only';
 import {
   createCipheriv,
   createDecipheriv,
+  createHash,
   createHmac,
   hkdfSync,
   randomBytes,
@@ -67,6 +68,20 @@ export function hmacHex(key: string, data: string): string {
 
 export function randomToken(bytes = 24): string {
   return randomBytes(bytes).toString('base64url');
+}
+
+export function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+/**
+ * Compares two secrets without leaking, through timing, how much of a guess
+ * was right. Both sides are hashed first so their lengths do not matter.
+ */
+export function secretsMatch(given: string, expected: string): boolean {
+  const a = createHash('sha256').update(given, 'utf8').digest();
+  const b = createHash('sha256').update(expected, 'utf8').digest();
+  return timingSafeEqual(a, b);
 }
 
 function scryptAsync(password: string, salt: Buffer): Promise<Buffer> {

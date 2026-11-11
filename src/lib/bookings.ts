@@ -9,17 +9,16 @@ import {
   updateCalendarEvent,
 } from './calendars';
 import type { EventInput } from './calendars/types';
-import { randomToken } from './crypto';
 import { EXCLUSION_VIOLATION, pgCode } from './db';
 import { sendBookingEmails, type BookingEvent } from './email';
 import { formatRange, isValidZone, zoneLabel } from './format';
 import {
   countRecentBookings,
-  getBookingByToken,
   getEventType,
   getEventTypeBySlug,
   getOwner,
   insertBooking,
+  newBookingToken,
   updateBooking,
 } from './store';
 import type { Answer, Booking, EventType, Owner } from './types';
@@ -27,15 +26,20 @@ import { sendBookingWebhook } from './webhook';
 
 // Creating, cancelling and rescheduling bookings. Each operation follows the
 // same order: check the time is really free, write to the database (which
-// enforces no overlaps), then update the owner's calendar and send notices.
+// itself refuses overlaps and broken buffers, so a race between two visitors
+// cannot get through), then update the owner's calendar and send notices.
 // Calendar and notification problems are recorded but never undo a booking.
+//
+// Callers find the booking first (by manage-link token for invitees, by id
+// for the owner) and are responsible for rate limiting; see lib/manage.ts.
 
 export type BookingErrorCode =
   | 'not_found'
   | 'invalid'
   | 'slot_taken'
   | 'too_late'
-  | 'calendar_unavailable';
+  | 'calendar_unavailable'
+  | 'rate_limited';
 
 export class BookingError extends Error {
   code: BookingErrorCode;
@@ -106,7 +110,6 @@ function locationText(booking: Pick<Booking, 'location_type' | 'invitee_phone'>,
 
 /** The event as it should appear on the owner's calendar. */
 function calendarEvent(booking: Booking, owner: Owner, baseUrl: string, conference: EventInput['conference']): EventInput {
-  const manage = `${baseUrl}/booking/${booking.token}`;
   const lines = [
     `Event: ${booking.event_name}`,
     `Invitee: ${booking.invitee_name} <${booking.invitee_email}>`,
@@ -117,7 +120,10 @@ function calendarEvent(booking: Booking, owner: Owner, baseUrl: string, conferen
   else if (booking.location) lines.push(`Where: ${booking.location}`);
   for (const answer of booking.answers) lines.push('', answer.label, answer.value);
   if (booking.notes) lines.push('', 'Notes', booking.notes);
-  lines.push('', 'Need to make a change?', `Reschedule: ${manage}/reschedule`, `Cancel: ${manage}/cancel`);
+  if (booking.token) {
+    const manage = `${baseUrl}/booking/${booking.token}`;
+    lines.push('', 'Need to make a change?', `Reschedule: ${manage}/reschedule`, `Cancel: ${manage}/cancel`);
+  }
 
   return {
     uid: booking.id,
@@ -194,14 +200,16 @@ export async function createBooking(request: BookingRequest, baseUrl: string): P
   const startMs = Date.parse(request.start);
   if (!Number.isFinite(startMs)) throw new BookingError('invalid', 'Please pick a time.');
   if ((await countRecentBookings()) >= MAX_BOOKINGS_PER_HOUR) {
-    throw new BookingError('invalid', 'Too many bookings are coming in right now. Please try again a little later.');
+    throw new BookingError('rate_limited', 'Too many bookings are coming in right now. Please try again a little later.');
   }
   await requireFreeSlot(eventType, startMs);
 
   let booking: Booking;
   try {
+    const { token_hash, token_sealed } = newBookingToken();
     booking = await insertBooking({
-      token: randomToken(),
+      token_hash,
+      token_sealed,
       event_type_id: eventType.id,
       event_name: eventType.name,
       start_at: new Date(startMs),
@@ -259,22 +267,22 @@ async function saveToCalendar(
   }
 }
 
-async function loadConfirmed(token: string): Promise<{ booking: Booking; owner: Owner }> {
-  const [booking, owner] = await Promise.all([getBookingByToken(token), getOwner()]);
-  if (!booking || !owner) throw new BookingError('not_found', 'This booking could not be found.');
+async function requireConfirmed(booking: Booking): Promise<Owner> {
+  const owner = await getOwner();
+  if (!owner) throw new BookingError('not_found', 'This booking could not be found.');
   if (booking.status !== 'confirmed') {
     throw new BookingError('invalid', 'This booking has already been cancelled.');
   }
-  return { booking, owner };
+  return owner;
 }
 
 export async function cancelBooking(
-  token: string,
+  booking: Booking,
   by: 'invitee' | 'host',
   reason: string,
   baseUrl: string,
 ): Promise<Booking> {
-  const { booking, owner } = await loadConfirmed(token);
+  const owner = await requireConfirmed(booking);
   if (by === 'invitee' && booking.start_at.getTime() <= Date.now()) {
     throw new BookingError('too_late', 'This meeting has already started, so it can no longer be cancelled.');
   }
@@ -302,13 +310,13 @@ export async function cancelBooking(
 }
 
 export async function rescheduleBooking(
-  token: string,
+  booking: Booking,
   start: string,
   by: 'invitee' | 'host',
   baseUrl: string,
   timezone?: string,
 ): Promise<Booking> {
-  const { booking, owner } = await loadConfirmed(token);
+  const owner = await requireConfirmed(booking);
   if (by === 'invitee' && booking.start_at.getTime() <= Date.now()) {
     throw new BookingError('too_late', 'This meeting has already started, so it can no longer be moved.');
   }

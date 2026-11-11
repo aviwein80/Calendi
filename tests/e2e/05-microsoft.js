@@ -1,7 +1,7 @@
 // Outlook / Microsoft 365, against a stand-in for Microsoft Graph (mocks.js):
 // sign-in, rotating refresh tokens, busy / free / tentative / all-day events,
 // paged results, Teams links, and the owner cancelling from the admin.
-const { chromium, BASE, D, utc, check, finish, daySlots, mock, sql, reset, admin, visitor, book, pickDay, shot } = require('./lib');
+const { chromium, BASE, D, utc, check, finish, daySlots, mock, sql, reset, admin, visitor, book, pickDay, shot, tokenHash } = require('./lib');
 
 (async () => {
   await reset();
@@ -85,7 +85,7 @@ const { chromium, BASE, D, utc, check, finish, daySlots, mock, sql, reset, admin
   await page.waitForSelector('text=No upcoming bookings');
   state = await mock('/state');
   check('Graph "cancel" was used, so attendees are notified', state.microsoft.cancelled[0].id === event.id && state.microsoft.cancelled[0].via === 'cancel');
-  check('the booking is marked cancelled by the host, with the reason', sql(`select status || '|' || cancelled_by || '|' || cancel_reason from bookings where token='${token}'`) === 'cancelled|host|Double booked, sorry');
+  check('the booking is marked cancelled by the host, with the reason', sql(`select status || '|' || cancelled_by || '|' || cancel_reason from bookings where token_hash='${tokenHash(token)}'`) === 'cancelled|host|Double booked, sorry');
   await guest.page.goto(`${BASE}/booking/${token}`);
   await guest.page.waitForSelector('text=Reason: Double booked, sorry');
   check("the invitee's page shows the cancellation and reason", true);

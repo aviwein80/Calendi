@@ -13,6 +13,7 @@ import {
   type ComponentProps,
   type ReactNode,
 } from 'react';
+import { postJson } from '@/lib/postJson';
 import { Button, cx } from './ui';
 
 // Small interactive pieces used around the admin.
@@ -60,7 +61,45 @@ export function ActionForm({
   );
 }
 
-/** Submit button for an <ActionForm>: shows a spinner while the action runs. */
+/**
+ * A form that posts its fields as JSON to one of this app's endpoints and
+ * shows the reply. Like <ActionForm>, it keeps what was typed. The endpoint
+ * answers { ok, message?, redirect? }; on `redirect` the browser goes there.
+ */
+export function ApiForm({
+  endpoint,
+  className,
+  children,
+}: {
+  endpoint: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const [state, setState] = useState<FormState>(undefined);
+  const [pending, startSubmit] = useTransition();
+  return (
+    <form
+      className={className}
+      onSubmit={(event) => {
+        event.preventDefault();
+        const fields = Object.fromEntries(new FormData(event.currentTarget));
+        startSubmit(async () => {
+          const reply = await postJson<{ ok: boolean; message?: string; redirect?: string }>(endpoint, fields);
+          if (reply.ok && reply.redirect) {
+            // A full page load, so the new session cookie is used from the start.
+            window.location.assign(reply.redirect);
+            return;
+          }
+          setState(reply.ok ? { ok: reply.message } : { error: reply.message ?? 'Something went wrong. Please try again.' });
+        });
+      }}
+    >
+      <FormContext value={{ state, pending }}>{children}</FormContext>
+    </form>
+  );
+}
+
+/** Submit button for an <ActionForm> or <ApiForm>: shows a spinner while it runs. */
 export function SubmitButton({ children, disabled, ...props }: ButtonProps) {
   const { pending } = use(FormContext);
   return (

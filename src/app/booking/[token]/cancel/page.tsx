@@ -6,8 +6,9 @@ import { CancelForm } from '@/components/CancelForm';
 import { PublicFrame, PublicMessage, PublicSkeleton } from '@/components/PublicFrame';
 import { brandStyle } from '@/components/ui';
 import { formatRange, zoneLabel } from '@/lib/format';
+import { BLOCKED_MESSAGE, findBookingByLink } from '@/lib/manage';
 import { hasStarted } from '@/lib/public';
-import { getBookingByToken, getOwner } from '@/lib/store';
+import { getOwner } from '@/lib/store';
 
 export const metadata: Metadata = { title: 'Cancel meeting', robots: { index: false } };
 
@@ -27,10 +28,14 @@ export default function CancelPage(props: PageProps<'/booking/[token]/cancel'>) 
 async function Content({ params }: PageProps<'/booking/[token]/cancel'>) {
   await connection();
   const { token } = await params;
-  const [booking, owner] = await Promise.all([getBookingByToken(token), getOwner()]);
-  if (!booking || !owner) {
+  const [lookup, owner] = await Promise.all([findBookingByLink(token), getOwner()]);
+  if (lookup.status === 'blocked') {
+    return <PublicMessage title="Too many attempts">{BLOCKED_MESSAGE}</PublicMessage>;
+  }
+  if (lookup.status !== 'found' || !owner) {
     return <PublicMessage title="Booking not found">This link may be incomplete or out of date.</PublicMessage>;
   }
+  const booking = lookup.booking;
   if (booking.status !== 'confirmed' || hasStarted(booking)) {
     redirect(`/booking/${booking.token}`);
   }

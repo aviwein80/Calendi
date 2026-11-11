@@ -246,7 +246,7 @@ export async function sendBookingEmails(
         ...(event === 'cancelled' ? ([['Reason', booking.cancel_reason]] as Row[]) : []),
       ],
       actions:
-        event === 'cancelled'
+        event === 'cancelled' || !booking.token
           ? []
           : [
               { label: 'View booking', url: manageUrl },

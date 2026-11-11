@@ -31,6 +31,11 @@ src/lib/               Everything that is not a screen
   db.ts                Postgres client (postgres.js), connection-string handling
   crypto.ts            AES-GCM encryption, HMAC signing, scrypt password hashing
   session.ts           Owner session cookie; requireOwner / assertOwner
+  account.ts           Creating the owner (needs SETUP_TOKEN, once only) and sign-in
+  rateLimit.ts         Per-address limits counted in Postgres; clientAddress()
+  manage.ts            findBookingByLink(): manage-link lookup that counts wrong guesses
+  http.ts bookingApi.ts  Helpers for the JSON endpoints (429s, origin check, replies)
+  postJson.ts          Browser-side caller for those endpoints
   install.ts           "Is this deployment ready?": missing settings / database problems,
                        each with a plain-language fix (drives /admin/setup)
   availability/
@@ -43,7 +48,8 @@ src/lib/               Everything that is not a screen
     icsBuild.ts        Booking -> iCalendar text
     index.ts           The only entry point the rest of the app uses: token
                        refresh, busy cache, failure tracking, event writes
-  bookings.ts          createBooking / cancelBooking / rescheduleBooking
+  bookings.ts          createBooking / cancelBooking / rescheduleBooking (the last two
+                       take a booking the caller has already looked up)
   email.ts webhook.ts  Notifications (both optional, neither can fail a booking)
   format.ts public.ts constants.ts env.ts
 src/app/
@@ -52,9 +58,10 @@ src/app/
   booking/[token]/     Confirmation, cancel, reschedule (invitee, by secret token)
   admin/login, admin/setup
   admin/(panel)/       Signed-in admin: event-types, bookings, availability, calendars, settings
-  actions/public.ts    Server actions anyone can call (book, cancel, reschedule)
   actions/admin.ts     Server actions for the owner
-  actions/auth.ts      Setup, sign-in, sign-out
+  actions/auth.ts      Sign-out
+  api/bookings         POST book; api/bookings/cancel and /reschedule (by manage token)
+  api/auth             POST login, POST setup
   api/availability     GET slots for a date range
   api/oauth/[provider] Google / Microsoft sign-in round trip
   api/ics/[token]      .ics download
@@ -94,12 +101,33 @@ tests/                 *.test.ts unit tests; e2e/ browser specs + mock services
 - Every admin page's content component starts with `await requireOwner()`.
 - Every action in `actions/admin.ts` starts with `await assertOwner()`. Server
   actions are reachable by direct request; the proxy is not a security boundary.
-- `actions/public.ts` trusts nothing: validate shape with zod there, enforce
-  the rules again in `lib/bookings.ts`.
+- Setup needs the `SETUP_TOKEN` setting (24+ characters, compared with
+  `secretsMatch`) and refuses for ever once an owner exists. Do not add another
+  way to create or replace the owner.
+
+### Public endpoints (anything a visitor can call)
+- They are JSON route handlers under `src/app/api`, not server actions, so
+  they can answer with a real status code (429 when rate limited). Each one:
+  wraps its handler in `guarded()`, rejects `fromAnotherSite()`, then calls
+  `consume(LIMITS.x)` **before** doing any work, then validates with zod. The
+  rules are enforced again in `lib/bookings.ts` and by the database.
+- A new public endpoint gets its own entry in `LIMITS` and a check in
+  `tests/e2e/09-security.js`.
+- Manage-link tokens: 24 random bytes. Only `token_hash` (SHA-256) and
+  `token_sealed` (encrypted with APP_SECRET) are stored; `booking.token` is
+  filled in by `store.ts`, never read from a column. Every place that accepts
+  a token from a visitor looks it up with `findBookingByLink()`, which is what
+  counts and cuts off guessing. Never query by token any other way, and never
+  log a token.
+- The owner acts on bookings by id (after `assertOwner()`), not by token.
 
 ### Scheduling correctness (do not weaken these)
 - The `bookings_no_overlap` exclusion constraint is the last line of defence
-  against double-booking. Never remove it or add a code path around it.
+  against double-booking, and the `bookings_buffers` trigger is the same for
+  buffers (it queues writers on an advisory lock, so two simultaneous bookings
+  cannot both slip through). Never remove either or add a code path around
+  them. The trigger's rule must stay identical to the one in `slots.ts`: if
+  you change how buffers work, change both and the tests for both.
 - `createBooking` / `rescheduleBooking` re-check the slot with `fresh: true`
   (bypassing caches) immediately before writing.
 - Calendars **fail closed**: if any calendar marked "check for conflicts"
@@ -123,7 +151,10 @@ tests/                 *.test.ts unit tests; e2e/ browser specs + mock services
 
 ### Data and UI conventions
 - All SQL lives in `store.ts`; schema changes are new files in `db/migrations`
-  (never edit an applied migration). Every table has RLS enabled with no
+  (never edit an applied migration). Migrations run in production builds only:
+  Vercel preview builds skip them, because previews usually share the live
+  database. So a migration must not be needed by the code that is live *before*
+  the merge, and the PR description should say that the branch has one. Every table has RLS enabled with no
   policies so a Supabase project does not expose it through its Data API.
 - Forms that run a server action use `<ActionForm>` (keeps typed values on
   error), with `<SubmitButton>` and `<FormMessage>` inside. Do not use a bare
