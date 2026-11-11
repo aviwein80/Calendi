@@ -54,7 +54,7 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
 }
 
 function BookingRow({ booking, zone, baseUrl, view }: { booking: Booking; zone: string; baseUrl: string; view: View }) {
-  const manageUrl = `${baseUrl}/booking/${booking.token}`;
+  const manageUrl = booking.token ? `${baseUrl}/booking/${booking.token}` : '';
   return (
     <li>
       <details className="group">
@@ -119,11 +119,16 @@ function BookingRow({ booking, zone, baseUrl, view }: { booking: Booking; zone: 
           </dl>
           {view === 'upcoming' && (
             <div className="flex flex-wrap items-start gap-2">
-              <a href={`${manageUrl}/reschedule`} target="_blank" className={buttonClass('secondary', 'sm')}>
-                Reschedule
-              </a>
-              <CopyButton text={manageUrl} label="Copy invitee link" />
-              <HostCancel token={booking.token} invitee={booking.invitee_name} />
+              {/* Bookings from before links were stored encrypted cannot have theirs shown again. */}
+              {manageUrl && (
+                <>
+                  <a href={`${manageUrl}/reschedule`} target="_blank" className={buttonClass('secondary', 'sm')}>
+                    Reschedule
+                  </a>
+                  <CopyButton text={manageUrl} label="Copy invitee link" />
+                </>
+              )}
+              <HostCancel bookingId={booking.id} invitee={booking.invitee_name} />
             </div>
           )}
         </div>

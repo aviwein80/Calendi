@@ -1,7 +1,8 @@
 // Shared helpers for the end-to-end specs. Each spec is a plain Node script
 // that drives a real browser against the running app (see run.js).
 const { chromium } = require('playwright');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -12,6 +13,34 @@ const STATE = path.join(OUT, 'admin-session.json');
 fs.mkdirSync(OUT, { recursive: true });
 
 const OWNER = { name: 'Avi Tester', email: 'owner@example.com', password: 'correct-horse-battery' };
+/** The SETUP_TOKEN the runner starts the app with. */
+const SETUP_TOKEN = 'e2e-setup-token-0123456789abcdef';
+const APP_SECRET = 'end-to-end-test-secret-0123456789abcdef';
+const ROOT = path.join(__dirname, '..', '..');
+
+/** How a manage-link token is stored: its SHA-256. */
+const tokenHash = (token) => crypto.createHash('sha256').update(token, 'utf8').digest('hex');
+
+// Rate limits are per network address. Run locally there is no proxy, so the
+// app takes the address from X-Real-IP: every simulated visitor gets its own,
+// as real visitors would, and a spec can pick one to exhaust on purpose.
+let addresses = 0;
+const nextAddress = () => `10.0.${Math.floor(addresses / 250)}.${(addresses++ % 250) + 1}`;
+/** The address this spec's own (non-browser) requests come from. */
+const SPEC_ADDRESS = '10.9.0.1';
+
+/** fetch against the app, from a chosen address (default: this spec's own). */
+function api(route, { address = SPEC_ADDRESS, json, ...init } = {}) {
+  return fetch(route.startsWith('http') ? route : BASE + route, {
+    ...init,
+    ...(json !== undefined ? { method: 'POST', body: JSON.stringify(json) } : {}),
+    headers: {
+      'x-real-ip': address,
+      ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...init.headers,
+    },
+  });
+}
 
 let passed = 0;
 let failed = 0;
@@ -57,6 +86,7 @@ async function reset() {
     update schedules set overrides = '{}', weekly = '${WEEK}';
     update owner set integrations = '', webhook_url = '', welcome_message = '', brand_color = '#4f46e5',
       failed_logins = 0, locked_until = null;
+    delete from rate_limits;
   `);
   await mock('/reset', {});
 }
@@ -65,7 +95,7 @@ async function reset() {
 async function daySlots(d, slug = '30min') {
   const from = encodeURIComponent(d.at('00:00').toUTC().toISO());
   const to = encodeURIComponent(d.plus(1).at('00:00').toUTC().toISO());
-  const response = await fetch(`${BASE}/api/availability?slug=${slug}&from=${from}&to=${to}`);
+  const response = await api(`/api/availability?slug=${slug}&from=${from}&to=${to}`);
   const body = await response.json();
   if (!response.ok) return { status: response.status, error: body.error, times: [] };
   const format = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
@@ -73,7 +103,12 @@ async function daySlots(d, slug = '30min') {
 }
 
 async function newPage(browser, options) {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, timezoneId: 'America/New_York', ...options });
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    timezoneId: 'America/New_York',
+    extraHTTPHeaders: { 'x-real-ip': nextAddress() },
+    ...options,
+  });
   const page = await context.newPage();
   page.on('pageerror', (error) => {
     failed++;
@@ -104,6 +139,30 @@ async function book(page, { slug = '30min', day, time, name = 'Jane Invitee', em
   await page.click('text=Schedule meeting');
   await page.waitForURL('**/booking/**', { timeout: 20000 });
   return page.url().split('/booking/')[1].split(/[/?]/)[0];
+}
+
+/**
+ * Starts a separate, short-lived copy of the app with exactly these settings
+ * and waits until it answers. The caller kills the returned process.
+ */
+async function startApp(port, settings) {
+  const env = { ...process.env, ...settings };
+  for (const name of ['DATABASE_URL', 'POSTGRES_URL', 'POSTGRES_URL_NON_POOLING', 'APP_SECRET', 'APP_URL', 'SETUP_TOKEN']) {
+    // Blank rather than removed: a removed variable would be filled back in
+    // from a developer's .env.local, a blank one is left alone.
+    if (!(name in settings)) env[name] = '';
+  }
+  const child = spawn('node', ['node_modules/next/dist/bin/next', 'start', '-p', String(port)], { cwd: ROOT, env, stdio: 'ignore' });
+  for (let i = 0; i < 80; i++) {
+    try {
+      await fetch(`http://localhost:${port}/icon.svg`);
+      return child;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  child.kill();
+  throw new Error(`The app did not start on port ${port}`);
 }
 
 const shot = (page, name, fullPage = false) => page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage });
@@ -160,6 +219,7 @@ const offered = (page) =>
   page.$$eval('ul[aria-label="Available times"] button', (buttons) => buttons.map((b) => b.textContent.trim()));
 
 module.exports = {
-  chromium, BASE, OUT, STATE, OWNER, D, NY, utc, compact, icsDate, icsLocal,
+  chromium, BASE, OUT, STATE, OWNER, SETUP_TOKEN, APP_SECRET, DATABASE_URL, D, NY, utc, compact, icsDate, icsLocal,
   check, finish, sql, mock, reset, daySlots, admin, visitor, book, pickDay, offered, shot,
+  api, tokenHash, nextAddress, startApp,
 };

@@ -14,6 +14,15 @@ const candidates = [
   ['POSTGRES_URL', process.env.POSTGRES_URL],
 ].filter(([, value], index, all) => value && all.findIndex(([, other]) => other === value) === index);
 
+// A preview deployment of an unmerged branch usually shares the production
+// database. Letting it change the tables would break the live site, which is
+// still running the old code, so only production builds migrate.
+if (process.env.VERCEL_ENV === 'preview' && process.env.MIGRATE_ON_PREVIEW !== '1') {
+  console.log('[migrate] Preview deployment: leaving the database as it is.');
+  console.log('[migrate] (Set MIGRATE_ON_PREVIEW=1 for previews that have a database of their own.)');
+  process.exit(0);
+}
+
 if (candidates.length === 0) {
   console.log('[migrate] No DATABASE_URL set; skipping migrations.');
   console.log('[migrate] The app will show a setup checklist until a database is connected.');

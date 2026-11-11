@@ -15,7 +15,7 @@ import {
 import { DateTime } from 'luxon';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition } from 'react';
-import { bookAction, rescheduleAction, type PublicResult } from '@/app/actions/public';
+import { postJson, type BookingReply } from '@/lib/postJson';
 import { formatDate, formatDuration, formatTime, locationSummary } from '@/lib/format';
 import type { LocationType, PublicEventType, PublicOwner } from '@/lib/types';
 import { Avatar, Button, cx, Field, Input, Notice, Select, Textarea } from './ui';
@@ -468,7 +468,7 @@ function RescheduleButton({
   slot: string;
   zone: string;
   onDone: (token: string) => void;
-  onFail: (result: Extract<PublicResult, { ok: false }>) => void;
+  onFail: (result: Extract<BookingReply, { ok: false }>) => void;
 }) {
   const [pending, startTransition] = useTransition();
   return (
@@ -478,7 +478,7 @@ function RescheduleButton({
       disabled={pending}
       onClick={() =>
         startTransition(async () => {
-          const result = await rescheduleAction({ token, start: slot, timezone: zone });
+          const result = await postJson<BookingReply>('/api/bookings/reschedule', { token, start: slot, timezone: zone });
           if (result.ok) onDone(result.token);
           else onFail(result);
         })
@@ -516,7 +516,7 @@ function DetailsForm({
     for (const question of eventType.questions) answers[question.id] = text(`q_${question.id}`);
     setError('');
     startTransition(async () => {
-      const result = await bookAction({
+      const result = await postJson<BookingReply>('/api/bookings', {
         slug: eventType.slug,
         start: slot,
         timezone: zone,

@@ -1,13 +1,12 @@
 'use client';
 
-import { loginAction, setupAction } from '@/app/actions/auth';
-import { ActionForm, FormMessage, SubmitButton } from './client';
+import { ApiForm, FormMessage, SubmitButton } from './client';
 import { TimezoneSelect } from './TimezoneSelect';
 import { Field, Input } from './ui';
 
 export function LoginForm() {
   return (
-    <ActionForm action={loginAction} className="space-y-4">
+    <ApiForm endpoint="/api/auth/login" className="space-y-4">
       <Field label="Email" htmlFor="email">
         <Input id="email" name="email" type="email" required autoComplete="username" autoFocus />
       </Field>
@@ -16,15 +15,22 @@ export function LoginForm() {
       </Field>
       <FormMessage />
       <SubmitButton className="w-full">Sign in</SubmitButton>
-    </ActionForm>
+    </ApiForm>
   );
 }
 
 export function SetupForm({ minPassword }: { minPassword: number }) {
   return (
-    <ActionForm action={setupAction} className="space-y-4">
+    <ApiForm endpoint="/api/auth/setup" className="space-y-4">
+      <Field
+        label="Setup token"
+        htmlFor="setupToken"
+        hint="The value of this site's SETUP_TOKEN setting. It proves the site is yours; only someone who has it can create the account."
+      >
+        <Input id="setupToken" name="setupToken" type="password" required autoComplete="off" autoFocus />
+      </Field>
       <Field label="Your name" htmlFor="name" hint="Shown to people booking time with you.">
-        <Input id="name" name="name" required maxLength={120} autoComplete="name" autoFocus />
+        <Input id="name" name="name" required maxLength={120} autoComplete="name" />
       </Field>
       <Field label="Email" htmlFor="email" hint="Used to sign in, and for booking notifications.">
         <Input id="email" name="email" type="email" required maxLength={200} autoComplete="username" />
@@ -44,6 +50,6 @@ export function SetupForm({ minPassword }: { minPassword: number }) {
       </Field>
       <FormMessage />
       <SubmitButton className="w-full">Create my scheduling page</SubmitButton>
-    </ActionForm>
+    </ApiForm>
   );
 }

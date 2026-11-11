@@ -131,6 +131,9 @@ async function portFree(port) {
   start('app', 'node', ['node_modules/next/dist/bin/next', 'start', '-p', PORT], {
     DATABASE_URL,
     APP_SECRET: 'end-to-end-test-secret-0123456789abcdef',
+    // With a trailing space and line break, as a value pasted into a host's
+    // settings page often has. The setup form is given the clean value.
+    SETUP_TOKEN: 'e2e-setup-token-0123456789abcdef \n',
     APP_URL: '',
     CALENDAR_CACHE_SECONDS: '0',
     GOOGLE_AUTH_URL: 'http://localhost:4002/auth',
@@ -178,5 +181,8 @@ async function portFree(port) {
   console.log('\n── Summary');
   for (const [spec, result] of results) console.log(`  ${result.padEnd(8)} ${spec}`);
   console.log(`\nScreenshots and service logs: ${OUT}`);
-  process.exit(results.some(([, result]) => result === 'FAILED') ? 1 : 0);
+  // On a developer's machine a missing optional tool only skips its spec. In
+  // CI everything is installed, so a skip means the setup broke: fail loudly.
+  const bad = results.some(([, result]) => result === 'FAILED' || (process.env.CI && result === 'skipped'));
+  process.exit(bad ? 1 : 0);
 })();

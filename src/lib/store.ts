@@ -1,6 +1,6 @@
 import 'server-only';
 import { db } from './db';
-import { decryptJson, encryptJson } from './crypto';
+import { decrypt, decryptJson, encrypt, encryptJson, randomToken, secretsMatch, sha256Hex } from './crypto';
 import type {
   Booking,
   CalendarAccount,
@@ -278,42 +278,78 @@ export async function setBookingTarget(id: string | null): Promise<void> {
 
 // ── Bookings ─────────────────────────────────────────────────────────────
 
+/** Manage-link tokens: 24 random bytes (192 bits) as 32 URL-safe characters. */
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]{22,64}$/;
+
+type BookingRow = Omit<Booking, 'token'>;
+
+/** Adds the manage-link token, recovered from its encrypted copy. */
+function withToken(row: BookingRow): Booking {
+  let token = '';
+  if (row.token_sealed) {
+    try {
+      token = decrypt(row.token_sealed);
+    } catch {
+      // APP_SECRET changed since this booking was made: the link still works
+      // for whoever holds it, but it can no longer be shown again.
+    }
+  }
+  return { ...row, token };
+}
+
+/** A fresh token plus the two forms of it that are stored. */
+export function newBookingToken(): { token: string; token_hash: string; token_sealed: string } {
+  const token = randomToken(24);
+  return { token, token_hash: sha256Hex(token), token_sealed: encrypt(token) };
+}
+
+/**
+ * Finds a booking by its manage-link token. The database is searched by the
+ * token's hash, and the match is then confirmed with a constant-time
+ * comparison, so response time says nothing about how close a guess was.
+ */
 export async function getBookingByToken(token: string): Promise<Booking | null> {
-  const rows = await db()<Booking[]>`select * from bookings where token = ${token}`;
-  return rows[0] ?? null;
+  if (typeof token !== 'string' || !TOKEN_PATTERN.test(token)) return null;
+  const hash = sha256Hex(token);
+  const rows = await db()<BookingRow[]>`select * from bookings where token_hash = ${hash}`;
+  const row = rows[0];
+  if (!row || !secretsMatch(row.token_hash, hash)) return null;
+  return { ...row, token };
 }
 
 export async function getBooking(id: string): Promise<Booking | null> {
-  const rows = await db()<Booking[]>`select * from bookings where id = ${id}`;
-  return rows[0] ?? null;
+  const rows = await db()<BookingRow[]>`select * from bookings where id = ${id}`;
+  return rows[0] ? withToken(rows[0]) : null;
 }
 
 export async function listConfirmedBookingsBetween(from: Date, to: Date): Promise<Booking[]> {
-  return db()<Booking[]>`
+  const rows = await db()<BookingRow[]>`
     select * from bookings
     where status = 'confirmed' and start_at < ${to} and end_at > ${from}
     order by start_at`;
+  return rows.map(withToken);
 }
 
 export async function listBookings(view: 'upcoming' | 'past' | 'cancelled'): Promise<Booking[]> {
   const sql = db();
-  if (view === 'upcoming') {
-    return sql<Booking[]>`
-      select * from bookings where status = 'confirmed' and end_at >= now()
-      order by start_at limit 200`;
-  }
-  if (view === 'past') {
-    return sql<Booking[]>`
-      select * from bookings where status = 'confirmed' and end_at < now()
-      order by start_at desc limit 200`;
-  }
-  return sql<Booking[]>`
-    select * from bookings where status = 'cancelled'
-    order by start_at desc limit 200`;
+  const rows =
+    view === 'upcoming'
+      ? await sql<BookingRow[]>`
+          select * from bookings where status = 'confirmed' and end_at >= now()
+          order by start_at limit 200`
+      : view === 'past'
+        ? await sql<BookingRow[]>`
+            select * from bookings where status = 'confirmed' and end_at < now()
+            order by start_at desc limit 200`
+        : await sql<BookingRow[]>`
+            select * from bookings where status = 'cancelled'
+            order by start_at desc limit 200`;
+  return rows.map(withToken);
 }
 
 export async function listAllBookings(): Promise<Booking[]> {
-  return db()<Booking[]>`select * from bookings order by start_at desc limit 5000`;
+  const rows = await db()<BookingRow[]>`select * from bookings order by start_at desc limit 5000`;
+  return rows.map(withToken);
 }
 
 /** How many bookings were made in the last hour (a brake on automated spam). */
@@ -325,7 +361,8 @@ export async function countRecentBookings(): Promise<number> {
 
 export type BookingInsert = Pick<
   Booking,
-  | 'token'
+  | 'token_hash'
+  | 'token_sealed'
   | 'event_type_id'
   | 'event_name'
   | 'start_at'
@@ -345,14 +382,14 @@ export type BookingInsert = Pick<
 
 export async function insertBooking(input: BookingInsert): Promise<Booking> {
   const sql = db();
-  const rows = await sql<Booking[]>`
+  const rows = await sql<BookingRow[]>`
     insert into bookings ${sql({
       ...input,
       guests: sql.json(input.guests),
       answers: sql.json(input.answers),
     } as never)}
     returning *`;
-  return rows[0];
+  return withToken(rows[0]);
 }
 
 export async function updateBooking(
@@ -381,6 +418,28 @@ export async function updateBooking(
 ): Promise<Booking | null> {
   if (Object.keys(fields).length === 0) return getBooking(id);
   const sql = db();
-  const rows = await sql<Booking[]>`update bookings set ${sql(fields)} where id = ${id} returning *`;
-  return rows[0] ?? null;
+  const rows = await sql<BookingRow[]>`update bookings set ${sql(fields)} where id = ${id} returning *`;
+  return rows[0] ? withToken(rows[0]) : null;
+}
+
+// ── Rate limits ──────────────────────────────────────────────────────────
+
+/** Adds one to a counter for the current time window and returns the new total. */
+export async function bumpRateCounter(key: string, windowStart: Date): Promise<number> {
+  const sql = db();
+  const rows = await sql<{ count: number }[]>`
+    insert into rate_limits (key, window_start, count) values (${key}, ${windowStart}, 1)
+    on conflict (key, window_start) do update set count = rate_limits.count + 1
+    returning count`;
+  // Old windows are never read again. Sweep them whenever a new window opens.
+  if (rows[0].count === 1) {
+    await sql`delete from rate_limits where window_start < now() - interval '1 day'`;
+  }
+  return rows[0].count;
+}
+
+export async function readRateCounter(key: string, windowStart: Date): Promise<number> {
+  const rows = await db()<{ count: number }[]>`
+    select count from rate_limits where key = ${key} and window_start = ${windowStart}`;
+  return rows[0]?.count ?? 0;
 }

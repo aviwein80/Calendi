@@ -6,8 +6,9 @@ import { PublicFrame, PublicMessage, PublicSkeleton } from '@/components/PublicF
 import { brandStyle, buttonClass, LinkButton } from '@/components/ui';
 import { emailConfig } from '@/lib/email';
 import { formatRange, zoneLabel } from '@/lib/format';
+import { BLOCKED_MESSAGE, findBookingByLink } from '@/lib/manage';
 import { hasStarted } from '@/lib/public';
-import { getBookingByToken, getOwner } from '@/lib/store';
+import { getOwner } from '@/lib/store';
 import type { Booking, Owner } from '@/lib/types';
 
 // What an invitee sees after booking, and where their emailed links lead:
@@ -59,10 +60,14 @@ function calendarLinks(booking: Booking, owner: Owner) {
 async function Content({ params, searchParams }: PageProps<'/booking/[token]'>) {
   await connection();
   const [{ token }, query] = await Promise.all([params, searchParams]);
-  const [booking, owner] = await Promise.all([getBookingByToken(token), getOwner()]);
-  if (!booking || !owner) {
+  const [lookup, owner] = await Promise.all([findBookingByLink(token), getOwner()]);
+  if (lookup.status === 'blocked') {
+    return <PublicMessage title="Too many attempts">{BLOCKED_MESSAGE}</PublicMessage>;
+  }
+  if (lookup.status !== 'found' || !owner) {
     return <PublicMessage title="Booking not found">This link may be incomplete or out of date.</PublicMessage>;
   }
+  const booking = lookup.booking;
 
   const zone = booking.invitee_timezone;
   const cancelled = booking.status === 'cancelled';

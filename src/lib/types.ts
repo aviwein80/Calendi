@@ -124,6 +124,14 @@ export type CalendarRow = {
 
 export type Booking = {
   id: string;
+  /** SHA-256 of the manage-link token. This is what links are looked up by. */
+  token_hash: string;
+  /** The token encrypted with APP_SECRET ('' for bookings older than that scheme). */
+  token_sealed: string;
+  /**
+   * The manage-link token itself. Not a column: `store.ts` fills it in by
+   * decrypting `token_sealed`. Empty when it cannot be recovered.
+   */
   token: string;
   event_type_id: string | null;
   event_name: string;

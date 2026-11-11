@@ -1,7 +1,7 @@
 // Google Calendar, against a stand-in for Google's servers (mocks.js): the
 // sign-in round trip, token refresh, busy times, creating the event with a
 // Meet link, moving it, deleting it, and an outage.
-const { chromium, BASE, D, utc, check, finish, daySlots, mock, sql, reset, admin, visitor, book, pickDay, offered, shot } = require('./lib');
+const { chromium, BASE, D, utc, check, finish, daySlots, mock, sql, reset, admin, visitor, book, pickDay, offered, shot, tokenHash } = require('./lib');
 
 (async () => {
   await reset();
@@ -67,7 +67,7 @@ const { chromium, BASE, D, utc, check, finish, daySlots, mock, sql, reset, admin
   check('a Meet link was requested', event.input.conferenceData.createRequest.conferenceSolutionKey.type === 'hangoutsMeet' && event.query.conferenceDataVersion === '1');
   check('the description carries reschedule and cancel links', event.input.description.includes(`/booking/${token}/reschedule`) && event.input.description.includes(`/booking/${token}/cancel`));
   check('the title names both people', event.input.summary === '30 Minute Meeting: Jane Invitee and Avi Tester', event.input.summary);
-  check('the booking records where it was saved', sql(`select external_event_id || '|' || invited_by_calendar::text || '|' || meeting_url || '|' || sync_error from bookings where token='${token}'`) === `${event.id}|true|https://meet.google.test/${event.id}|`);
+  check('the booking records where it was saved', sql(`select external_event_id || '|' || invited_by_calendar::text || '|' || meeting_url || '|' || sync_error from bookings where token_hash='${tokenHash(token)}'`) === `${event.id}|true|https://meet.google.test/${event.id}|`);
   const after = await daySlots(D.mon);
   check('the booked slot is gone for the next visitor', !after.times.includes('11:00') && after.times.includes('11:30'));
 

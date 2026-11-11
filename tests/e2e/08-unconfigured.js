@@ -2,35 +2,9 @@
 // after importing the project into a host and deploying before adding a
 // database or APP_SECRET: it must be a to-do list, never a bare server error.
 // Each case starts its own short-lived copy of the app with different settings.
-const { spawn } = require('child_process');
-const path = require('path');
-const { chromium, check, finish, visitor, shot } = require('./lib');
+const { chromium, check, finish, visitor, shot, startApp, DATABASE_URL, APP_SECRET: SECRET, SETUP_TOKEN } = require('./lib');
 
-const ROOT = path.join(__dirname, '..', '..');
-const DATABASE_URL = process.env.E2E_DATABASE_URL || 'postgres://calendi:calendi@localhost:5432/calendi_test';
-const SECRET = 'end-to-end-test-secret-0123456789abcdef';
 const FIRST_PORT = Number(process.env.E2E_PORT || 3210) + 10;
-
-/** Starts the app with exactly these settings and waits until it answers. */
-async function startApp(port, settings) {
-  const env = { ...process.env, ...settings };
-  for (const name of ['DATABASE_URL', 'POSTGRES_URL', 'POSTGRES_URL_NON_POOLING', 'APP_SECRET', 'APP_URL']) {
-    // Blank rather than removed: a removed variable would be filled back in
-    // from a developer's .env.local, a blank one is left alone.
-    if (!(name in settings)) env[name] = '';
-  }
-  const child = spawn('node', ['node_modules/next/dist/bin/next', 'start', '-p', String(port)], { cwd: ROOT, env, stdio: 'ignore' });
-  for (let i = 0; i < 80; i++) {
-    try {
-      await fetch(`http://localhost:${port}/icon.svg`);
-      return child;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-  }
-  child.kill();
-  throw new Error(`The app did not start on port ${port}`);
-}
 
 (async () => {
   const browser = await chromium.launch();
@@ -53,6 +27,7 @@ async function startApp(port, settings) {
     check('the landing page leads to a setup checklist', true);
     check('it names the missing database', (await page.locator('text=No database is connected').count()) === 1);
     check('it names the missing secret', (await page.locator('text=APP_SECRET is not set').count()) === 1);
+    check('and the missing setup token, so all three can be added in one go', (await page.locator('text=SETUP_TOKEN is not set').count()) === 1);
     check('it says to redeploy afterwards', (await page.locator('text=Then redeploy.').count()) === 1);
     check('the account form is not offered yet', (await page.locator('#password').count()) === 0);
     await page.waitForTimeout(300); // let the fade-in finish so the screenshot is legible
@@ -78,7 +53,7 @@ async function startApp(port, settings) {
     console.log('Database connected, but its tables were never created');
     const empty = new URL(DATABASE_URL);
     empty.pathname = '/postgres';
-    ({ page, base } = await open({ DATABASE_URL: empty.href, APP_SECRET: SECRET }));
+    ({ page, base } = await open({ DATABASE_URL: empty.href, APP_SECRET: SECRET, SETUP_TOKEN }));
     await page.goto(`${base}/`);
     await page.waitForURL('**/admin/setup');
     await page.waitForSelector('text=its tables have not been created');

@@ -1,4 +1,6 @@
 import 'server-only';
+import { configuredSetupToken } from './account';
+import { MIN_SETUP_TOKEN_LENGTH } from './constants';
 import { getOwner } from './store';
 import type { Owner } from './types';
 
@@ -10,6 +12,7 @@ export type InstallProblem = {
   id:
     | 'database_missing'
     | 'secret_missing'
+    | 'setup_token_missing'
     | 'database_address'
     | 'database_unreachable'
     | 'database_login'
@@ -38,6 +41,19 @@ export function settingProblems(env: Record<string, string | undefined> = proces
     });
   }
   return problems;
+}
+
+/**
+ * SETUP_TOKEN is what stops a stranger from claiming a freshly deployed site.
+ * It is only needed until the owner account exists.
+ */
+export function setupTokenProblem(env: Record<string, string | undefined> = process.env): InstallProblem | null {
+  if (configuredSetupToken(env)) return null;
+  return {
+    id: 'setup_token_missing',
+    title: env.SETUP_TOKEN?.trim() ? 'SETUP_TOKEN is too short' : 'SETUP_TOKEN is not set',
+    fix: `Add a setting named SETUP_TOKEN with a random value of at least ${MIN_SETUP_TOKEN_LENGTH} characters. You type it once, on the form that creates your account, to prove the site is yours; nobody without it can claim the site. You can remove the setting once your account exists.`,
+  };
 }
 
 function errorCode(err: unknown): string {
@@ -95,12 +111,21 @@ export type InstallStatus =
 /** Checks the settings and then the database itself. Never throws. */
 export async function installStatus(): Promise<InstallStatus> {
   const problems = settingProblems();
-  if (problems.some((problem) => problem.id === 'database_missing')) return { ready: false, problems };
+  const setupToken = setupTokenProblem();
+  // With no database there cannot be an owner yet, so the setup token is
+  // certainly still needed: list it now rather than after the next deploy.
+  if (problems.some((problem) => problem.id === 'database_missing')) {
+    return { ready: false, problems: setupToken ? [...problems, setupToken] : problems };
+  }
   try {
     const owner = await getOwner();
+    if (!owner && setupToken) problems.push(setupToken);
     return problems.length > 0 ? { ready: false, problems } : { ready: true, owner };
   } catch (err) {
     console.error('[install] database check failed:', err);
-    return { ready: false, problems: [...problems, describeDatabaseError(err)] };
+    const database = describeDatabaseError(err);
+    // Missing tables also mean a brand-new install.
+    const fresh = database.id === 'database_empty' && setupToken ? [setupToken] : [];
+    return { ready: false, problems: [...problems, database, ...fresh] };
   }
 }

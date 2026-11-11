@@ -3,7 +3,7 @@
 import { LoaderCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
-import { cancelAction } from '@/app/actions/public';
+import { postJson, type BookingReply } from '@/lib/postJson';
 import { Button, Field, LinkButton, Notice, Textarea } from './ui';
 
 export function CancelForm({ token }: { token: string }) {
@@ -19,7 +19,7 @@ export function CancelForm({ token }: { token: string }) {
         const reason = String(new FormData(event.currentTarget).get('reason') ?? '');
         setError('');
         startTransition(async () => {
-          const result = await cancelAction({ token, reason });
+          const result = await postJson<BookingReply>('/api/bookings/cancel', { token, reason });
           if (result.ok) router.push(`/booking/${token}`);
           else setError(result.message);
         });

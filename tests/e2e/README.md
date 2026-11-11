@@ -37,6 +37,9 @@ name contains the word given (setup always runs first).
   environment, point `RADICALE_PYTHON` at that environment's `python`.
 - Free ports: 3210 (the app; change with `E2E_PORT`), 4001–4004, 4025, 5232.
 
+In CI the same command runs on every push, with Postgres as a service
+container (see `.github/workflows/ci.yml`).
+
 ## How it fits together
 
 `run.js` empties and migrates the database, builds the app, starts the mocks,
@@ -46,6 +49,11 @@ creates the owner and saves the signed-in session that later specs reuse;
 every other spec starts by calling `reset()` so it can run on its own.
 
 Screenshots and the logs of each service land in `tests/e2e/.out/`.
+
+Rate limits are per network address. With no proxy in front, the app reads the
+address from `X-Real-IP`, so every simulated visitor is given its own
+(`lib.js`), and `09-security.js` picks single addresses to exhaust on purpose.
+`reset()` clears the counters.
 
 Dates are computed from "the first Monday at least six days from now"
 (`D.mon`, `D.tue`, … `D.mon3` in `lib.js`), so the specs do not go stale. The

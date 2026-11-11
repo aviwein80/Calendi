@@ -1,6 +1,6 @@
 // The core loop with no calendars connected: book, download the calendar
 // file, reschedule, cancel.
-const { chromium, BASE, D, utc, check, finish, sql, reset, visitor, book, pickDay, offered, shot } = require('./lib');
+const { chromium, BASE, D, utc, check, finish, sql, reset, visitor, book, pickDay, offered, shot, tokenHash } = require('./lib');
 
 (async () => {
   await reset();
@@ -25,7 +25,7 @@ const { chromium, BASE, D, utc, check, finish, sql, reset, visitor, book, pickDa
   const token = await book(page, { day: D.wed, time: '10:00 AM', fill: (p) => p.fill('#notes', 'Looking forward to it.') });
   await page.waitForSelector('text=You are scheduled');
   await shot(page, 'public-confirmed');
-  check('stored at the right instant', sql(`select to_char(start_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS".000Z"') from bookings where token='${token}'`) === utc(D.wed.at('10:00')));
+  check('stored at the right instant', sql(`select to_char(start_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS".000Z"') from bookings where token_hash='${tokenHash(token)}'`) === utc(D.wed.at('10:00')));
 
   const ics = await (await ctx.request.get(`${BASE}/api/ics/${token}`)).text();
   check('calendar file downloads', ics.includes('BEGIN:VEVENT') && ics.includes('SUMMARY:30 Minute Meeting with Avi Tester'));
@@ -37,14 +37,14 @@ const { chromium, BASE, D, utc, check, finish, sql, reset, visitor, book, pickDa
   await page.click('ul[aria-label="Available times"] button:text-is("2:30 PM")');
   await page.click('button:text-is("Confirm")');
   await page.waitForSelector('text=Your meeting was moved');
-  check('moved, remembering the old time', sql(`select to_char(start_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS".000Z"') || '|' || (previous_start_at is not null)::text || '|' || sequence from bookings where token='${token}'`) === `${utc(D.thu.at('14:30'))}|true|1`);
+  check('moved, remembering the old time', sql(`select to_char(start_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS".000Z"') || '|' || (previous_start_at is not null)::text || '|' || sequence from bookings where token_hash='${tokenHash(token)}'`) === `${utc(D.thu.at('14:30'))}|true|1`);
 
   await page.click('a:has-text("Cancel")');
   await page.waitForURL('**/cancel');
   await page.fill('#reason', 'Something came up');
   await page.click('button:has-text("Cancel meeting")');
   await page.waitForSelector('text=This meeting was cancelled');
-  check('cancelled by the invitee with a reason', sql(`select status || '|' || cancelled_by || '|' || cancel_reason from bookings where token='${token}'`) === 'cancelled|invitee|Something came up');
+  check('cancelled by the invitee with a reason', sql(`select status || '|' || cancelled_by || '|' || cancel_reason from bookings where token_hash='${tokenHash(token)}'`) === 'cancelled|invitee|Something came up');
   check('a cancelled booking can no longer be changed', (await page.locator('text=Reschedule').count()) === 0);
   check('no browser errors along the way', errors.length === 0, JSON.stringify(errors));
 

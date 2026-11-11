@@ -20,6 +20,7 @@ import {
   deleteCalendarAccount,
   deleteEventType,
   deleteSchedule,
+  getBooking,
   getIntegrations,
   getSchedule,
   insertEventType,
@@ -279,10 +280,12 @@ export async function disconnectAccountAction(accountId: string): Promise<Result
 
 // ── Bookings ─────────────────────────────────────────────────────────────
 
-export async function hostCancelAction(token: string, reason: string): Promise<Result> {
+export async function hostCancelAction(bookingId: string, reason: string): Promise<Result> {
   await assertOwner();
+  const booking = await getBooking(bookingId);
+  if (!booking) return { error: 'This booking could not be found.' };
   try {
-    await cancelBooking(token, 'host', reason, await getBaseUrl());
+    await cancelBooking(booking, 'host', reason, await getBaseUrl());
   } catch (err) {
     if (err instanceof BookingError) return { error: err.message };
     throw err;
