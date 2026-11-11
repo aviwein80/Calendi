@@ -107,7 +107,7 @@ export function Booker({ owner, eventType, hostTimezone, reschedule, prefill }: 
 
     fetch(`/api/availability?${query}`, { signal: controller.signal })
       .then(async (response) => {
-        const data = (await response.json()) as { slots?: string[]; message?: string };
+        const data = (await response.json().catch(() => ({}))) as { slots?: string[]; message?: string };
         if (!response.ok) throw new Error(data.message || 'Available times could not be loaded.');
         return data.slots ?? [];
       })

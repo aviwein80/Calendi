@@ -22,22 +22,22 @@ export async function GET(request: NextRequest): Promise<Response> {
     return json({ error: 'invalid', message: 'Give a slug and a from/to range of at most two months.' }, 400);
   }
 
-  const eventType = await getEventTypeBySlug(slug);
-  if (!eventType) return json({ error: 'not_found', message: 'This event does not exist.' }, 404);
-
-  // Someone moving an existing booking may reuse their own time, and may still
-  // reschedule after the event type has been switched off for new bookings.
-  let excluding: Booking | undefined;
-  const token = params.get('reschedule');
-  if (token) {
-    const booking = await getBookingByToken(token);
-    if (booking?.status === 'confirmed' && booking.event_type_id === eventType.id) excluding = booking;
-  }
-  if (!eventType.is_active && !excluding) {
-    return json({ error: 'not_found', message: 'This event is not taking bookings.' }, 404);
-  }
-
   try {
+    const eventType = await getEventTypeBySlug(slug);
+    if (!eventType) return json({ error: 'not_found', message: 'This event does not exist.' }, 404);
+
+    // Someone moving an existing booking may reuse their own time, and may still
+    // reschedule after the event type has been switched off for new bookings.
+    let excluding: Booking | undefined;
+    const token = params.get('reschedule');
+    if (token) {
+      const booking = await getBookingByToken(token);
+      if (booking?.status === 'confirmed' && booking.event_type_id === eventType.id) excluding = booking;
+    }
+    if (!eventType.is_active && !excluding) {
+      return json({ error: 'not_found', message: 'This event is not taking bookings.' }, 404);
+    }
+
     const slots = await getSlots(eventType, from, to, { excluding });
     return json({ slots: slots.map((ms) => new Date(ms).toISOString()) });
   } catch (err) {

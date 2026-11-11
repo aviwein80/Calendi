@@ -4,8 +4,8 @@ import { connection } from 'next/server';
 import { Suspense } from 'react';
 import { LoginForm } from '@/components/AuthForms';
 import { PublicFrame, PublicSkeleton } from '@/components/PublicFrame';
+import { installStatus } from '@/lib/install';
 import { currentOwner } from '@/lib/session';
-import { getOwner } from '@/lib/store';
 
 export const metadata: Metadata = { title: 'Sign in', robots: { index: false } };
 
@@ -21,7 +21,8 @@ export default function LoginPage() {
 
 async function Content() {
   await connection();
-  if (!(await getOwner())) redirect('/admin/setup');
+  const status = await installStatus();
+  if (!status.ready || !status.owner) redirect('/admin/setup');
   if (await currentOwner()) redirect('/admin/event-types');
   return (
     <div className="fade-in mx-auto w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-7 shadow-sm">

@@ -6,9 +6,12 @@ import { Suspense } from 'react';
 import { PublicFrame, PublicSkeleton } from '@/components/PublicFrame';
 import { Avatar, brandStyle } from '@/components/ui';
 import { formatDuration, LOCATION_LABELS } from '@/lib/format';
-import { getOwner, listEventTypes } from '@/lib/store';
+import { installStatus } from '@/lib/install';
+import { listEventTypes } from '@/lib/store';
 
 // The owner's landing page: who they are and what can be booked.
+
+const SETUP_PROBLEMS = ['database_missing', 'secret_missing', 'database_empty'];
 
 export default function HomePage() {
   return (
@@ -22,8 +25,17 @@ export default function HomePage() {
 
 async function Profile() {
   await connection();
-  const owner = await getOwner();
-  if (!owner) redirect('/admin/setup');
+  const status = await installStatus();
+  if (!status.ready) {
+    // A deployment that was never finished goes to the setup checklist. A
+    // database that is merely down right now is an ordinary error: visitors
+    // should not be shown the owner's setup page for that.
+    const unfinished = status.problems.every((problem) => SETUP_PROBLEMS.includes(problem.id));
+    if (unfinished) redirect('/admin/setup');
+    throw new Error(`The landing page could not load: ${status.problems.map((p) => p.title).join('; ')}`);
+  }
+  if (!status.owner) redirect('/admin/setup');
+  const owner = status.owner;
   const eventTypes = (await listEventTypes()).filter((e) => e.is_active && !e.is_hidden);
 
   return (

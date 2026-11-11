@@ -51,17 +51,19 @@ You need two things: somewhere to run the app, and a Postgres database. The
 steps below use Vercel and a database added through Vercel (Supabase or Neon);
 any Node host and any Postgres work the same way.
 
-1. **Import this repository into Vercel** (New Project → pick the repo). Leave the build settings alone.
+1. **Import this repository into Vercel** (New Project → pick the repo). Leave the build settings alone. Vercel deploys straight away; at this point the site shows an "Almost there" page listing what it still needs, which is the next two steps.
 2. **Add a database.** In the Vercel project: Storage → Create Database → Supabase or Neon → connect it to the project. That sets the database address for you. (Using a database you already have? Add its connection string as `DATABASE_URL` instead.)
-3. **Add one setting.** Project → Settings → Environment Variables → add `APP_SECRET` with a long random value. Generate one with:
+3. **Add one setting.** Project → Settings → Environment Variables → add `APP_SECRET` with a long random value of at least 32 characters. A password manager's generator works, or:
    ```bash
    openssl rand -base64 32
    ```
    Keep it. Everything encrypted in the database is locked with this value; if it changes, calendars have to be reconnected.
-4. **Deploy.** The database tables are created automatically during the build.
-5. **Open `/admin` straight away and create your account.** Until an account exists, the first person to open that page becomes the owner.
+4. **Redeploy** (Deployments → the ⋯ menu on the latest one → Redeploy). Settings only take effect on a new deployment, and the database tables are created during the build.
+5. **Open the site and create your account straight away.** Until an account exists, the first person to open the setup page becomes the owner.
 6. **Connect your calendars** under Calendars (each option shows its own steps), then check your hours under Availability.
 7. Optional: turn on email and the webhook under Settings. If you add a custom domain, set `APP_URL` to it (for example `https://meet.example.com`) so links in emails and calendar entries use that address.
+
+If something is still missing or the database cannot be reached, `/admin/setup` says which, and what to do about it.
 
 ### Connecting calendars
 

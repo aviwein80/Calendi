@@ -31,6 +31,8 @@ src/lib/               Everything that is not a screen
   db.ts                Postgres client (postgres.js), connection-string handling
   crypto.ts            AES-GCM encryption, HMAC signing, scrypt password hashing
   session.ts           Owner session cookie; requireOwner / assertOwner
+  install.ts           "Is this deployment ready?": missing settings / database problems,
+                       each with a plain-language fix (drives /admin/setup)
   availability/
     slots.ts           PURE slot engine (no I/O, no clock): unit-tested
     index.ts           getSlots(): schedule + calendars + bookings -> start times
@@ -77,6 +79,16 @@ tests/                 *.test.ts unit tests; e2e/ browser specs + mock services
 - `'use server'` files may only export async functions (types are fine).
 - Read `node_modules/next/dist/docs/` before using a Next API you have not used
   in this repo yet.
+
+### First run and failures
+- A deployment with no database or `APP_SECRET` must show the checklist at
+  `/admin/setup`, never a bare server error. `/`, `/admin/login` and
+  `/admin/setup` go through `installStatus()`; add new required settings to
+  `settingProblems()` with a fix someone can follow in their host's dashboard.
+- `installStatus()` never echoes raw error text (it can contain the connection
+  string); it maps error codes to fixed wording.
+- `src/app/error.tsx` is the catch-all for everything else. Route handlers
+  answer with JSON even when the database is down.
 
 ### Auth
 - Every admin page's content component starts with `await requireOwner()`.
