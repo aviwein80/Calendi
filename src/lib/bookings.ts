@@ -267,6 +267,16 @@ async function saveToCalendar(
   }
 }
 
+/**
+ * A booking as just re-read from the database, with the manage-link token the
+ * caller already holds carried over. (For bookings older than encrypted
+ * tokens, the token cannot be recovered from the row alone.)
+ */
+function withKnownToken(fresh: Booking | null, known: Booking): Booking {
+  if (!fresh) return known;
+  return fresh.token ? fresh : { ...fresh, token: known.token };
+}
+
 async function requireConfirmed(booking: Booking): Promise<Owner> {
   const owner = await getOwner();
   if (!owner) throw new BookingError('not_found', 'This booking could not be found.');
@@ -287,14 +297,16 @@ export async function cancelBooking(
     throw new BookingError('too_late', 'This meeting has already started, so it can no longer be cancelled.');
   }
 
-  let updated =
-    (await updateBooking(booking.id, {
+  let updated = withKnownToken(
+    await updateBooking(booking.id, {
       status: 'cancelled',
       cancel_reason: clean(reason, 1000),
       cancelled_by: by,
       cancelled_at: new Date(),
       sequence: booking.sequence + 1,
-    })) ?? booking;
+    }),
+    booking,
+  );
   clearBusyCache();
 
   if (booking.calendar_id && booking.external_event_id) {
@@ -302,7 +314,7 @@ export async function cancelBooking(
       await deleteCalendarEvent(booking.calendar_id, booking.external_event_id);
     } catch (err) {
       console.error('[calendar] could not remove cancelled booking:', err);
-      updated = (await updateBooking(booking.id, { sync_error: syncMessage(err) })) ?? updated;
+      updated = withKnownToken(await updateBooking(booking.id, { sync_error: syncMessage(err) }), updated);
     }
   }
   await notify('cancelled', updated, owner, baseUrl);
@@ -333,15 +345,17 @@ export async function rescheduleBooking(
 
   let updated: Booking;
   try {
-    updated =
-      (await updateBooking(booking.id, {
+    updated = withKnownToken(
+      await updateBooking(booking.id, {
         start_at: new Date(startMs),
         end_at: new Date(startMs + eventType.duration_minutes * 60_000),
         previous_start_at: booking.start_at,
         rescheduled_at: new Date(),
         sequence: booking.sequence + 1,
         ...(timezone && isValidZone(timezone) ? { invitee_timezone: timezone } : {}),
-      })) ?? booking;
+      }),
+      booking,
+    );
   } catch (err) {
     if (pgCode(err) === EXCLUSION_VIOLATION) throw new BookingError('slot_taken', SLOT_TAKEN);
     throw err;
@@ -355,14 +369,14 @@ export async function rescheduleBooking(
         updated.external_event_id,
         calendarEvent(updated, owner, baseUrl, null),
       );
-      if (updated.sync_error) updated = (await updateBooking(updated.id, { sync_error: '' })) ?? updated;
+      if (updated.sync_error) updated = withKnownToken(await updateBooking(updated.id, { sync_error: '' }), updated);
     } catch (err) {
       console.error('[calendar] could not move booking:', err);
-      updated = (await updateBooking(updated.id, { sync_error: syncMessage(err) })) ?? updated;
+      updated = withKnownToken(await updateBooking(updated.id, { sync_error: syncMessage(err) }), updated);
     }
   } else {
     // It never made it onto the calendar the first time; try again now.
-    updated = await saveToCalendar(updated, owner, eventType, baseUrl);
+    updated = withKnownToken(await saveToCalendar(updated, owner, eventType, baseUrl), updated);
   }
   await notify('rescheduled', updated, owner, baseUrl);
   return updated;

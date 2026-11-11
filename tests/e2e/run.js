@@ -179,5 +179,8 @@ async function portFree(port) {
   console.log('\n── Summary');
   for (const [spec, result] of results) console.log(`  ${result.padEnd(8)} ${spec}`);
   console.log(`\nScreenshots and service logs: ${OUT}`);
-  process.exit(results.some(([, result]) => result === 'FAILED') ? 1 : 0);
+  // On a developer's machine a missing optional tool only skips its spec. In
+  // CI everything is installed, so a skip means the setup broke: fail loudly.
+  const bad = results.some(([, result]) => result === 'FAILED' || (process.env.CI && result === 'skipped'));
+  process.exit(bad ? 1 : 0);
 })();

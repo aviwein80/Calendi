@@ -103,8 +103,10 @@ const sqlAsync = (query) =>
   statuses = await burst(11, (i) => post('/api/bookings/reschedule', { token: `${'D'.repeat(31)}${i % 10}`, start: utc(D.tue.at('10:00')) }, '10.8.7.1'));
   check('reschedule: limited per address', statuses[10] === 429, JSON.stringify(statuses));
 
+  // A booking from before tokens were encrypted has a hash but no sealed copy.
+  sql(`update bookings set token_sealed = '' where token_hash='${tokenHash(token)}'`);
   const moved = await post('/api/bookings/reschedule', { token, start: utc(D.mon.at('11:00')) }, '10.8.8.1');
-  check('a real link still reschedules', moved.status === 200 && sql(`select to_char(start_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS".000Z"') from bookings where token_hash='${tokenHash(token)}'`) === utc(D.mon.at('11:00')));
+  check('a real link still reschedules (even for a booking with no encrypted copy)', moved.status === 200 && sql(`select to_char(start_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS".000Z"') from bookings where token_hash='${tokenHash(token)}'`) === utc(D.mon.at('11:00')));
   const cancelled = await post('/api/bookings/cancel', { token, reason: 'done testing' }, '10.8.8.1');
   check('and cancels', cancelled.status === 200 && sql(`select status from bookings where token_hash='${tokenHash(token)}'`) === 'cancelled');
 
