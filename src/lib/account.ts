@@ -20,9 +20,14 @@ const LOCK_MINUTES = 15;
 const refuse = (status: number, message: string): AccountResult => ({ ok: false, status, message });
 const text = (value: unknown, max: number) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 
-/** The SETUP_TOKEN setting, or '' when it is missing or too short to be safe. */
+/**
+ * The SETUP_TOKEN setting, or '' when it is missing or too short to be safe.
+ * Surrounding whitespace is dropped first: a value pasted into a host's
+ * settings page often arrives with a trailing space or line break, which
+ * nobody could then type on the setup form.
+ */
 export function configuredSetupToken(env: Record<string, string | undefined> = process.env): string {
-  const token = env.SETUP_TOKEN ?? '';
+  const token = (env.SETUP_TOKEN ?? '').trim();
   return token.length >= MIN_SETUP_TOKEN_LENGTH ? token : '';
 }
 

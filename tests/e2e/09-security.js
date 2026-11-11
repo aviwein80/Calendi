@@ -2,7 +2,7 @@
 // manage-link tokens stored hashed, buffers enforced by the database even
 // when two bookings race, and setup staying closed once there is an owner.
 const { execFile } = require('child_process');
-const { chromium, BASE, D, OWNER, SETUP_TOKEN, DATABASE_URL, utc, check, finish, sql, reset, visitor, book, daySlots, api, tokenHash } = require('./lib');
+const { chromium, BASE, D, OWNER, SETUP_TOKEN, APP_SECRET, DATABASE_URL, utc, check, finish, sql, reset, visitor, book, daySlots, api, tokenHash, startApp } = require('./lib');
 
 const post = (route, json, address) => api(route, { json, address });
 const friendly = (body) => Boolean(body && body.message && body.message.length > 20 && !/error|exception/i.test(body.message));
@@ -44,6 +44,24 @@ const sqlAsync = (query) =>
   const limitedBody = await limited.json();
   check('the 429 carries a readable message and says when to retry', friendly(limitedBody) && Number(limited.headers.get('retry-after')) > 0, JSON.stringify(limitedBody));
   check('another address is not affected', (await api(`/api/availability?slug=30min&${range}`, { address: '10.8.1.2' })).status === 200);
+
+  // On Vercel the address comes from Vercel's own headers. X-Forwarded-For is
+  // the client's to write, so rotating it must not earn a fresh allowance.
+  const vercelPort = Number(process.env.E2E_PORT || 3210) + 30;
+  const onVercel = await startApp(vercelPort, { DATABASE_URL, APP_SECRET, VERCEL: '1' });
+  try {
+    const ask = (headers) => fetch(`http://localhost:${vercelPort}/api/availability?slug=30min&${range}`, { headers });
+    statuses = await burst(61, (i) => ask({ 'x-vercel-forwarded-for': '203.0.113.50', 'x-forwarded-for': `198.51.100.${i}` }));
+    check('on Vercel: a made-up X-Forwarded-For does not dodge the limit', statuses.slice(0, 60).every((s) => s === 200) && statuses[60] === 429, JSON.stringify(statuses.slice(55)));
+    statuses = await burst(61, (i) => ask({ 'x-real-ip': '203.0.113.51', 'x-forwarded-for': `198.51.100.${i}` }));
+    check('on Vercel: X-Real-IP is used when X-Vercel-Forwarded-For is absent', statuses[59] === 200 && statuses[60] === 429, JSON.stringify(statuses.slice(55)));
+    check('on Vercel: a different real address has its own allowance', (await ask({ 'x-vercel-forwarded-for': '203.0.113.52', 'x-forwarded-for': '198.51.100.1' })).status === 200);
+    statuses = await burst(61, (i) => ask({ 'x-forwarded-for': `198.51.100.${i}` }));
+    check('on Vercel: with only X-Forwarded-For everyone shares one allowance', statuses[60] === 429, JSON.stringify(statuses.slice(55)));
+  } finally {
+    onVercel.kill();
+  }
+  sql('delete from rate_limits');
 
   const junk = { slug: '30min', start: 'not-a-time-at-all', name: 'x', email: 'x@example.com', timezone: 'UTC' };
   statuses = await burst(9, () => post('/api/bookings', junk, '10.8.2.1'));

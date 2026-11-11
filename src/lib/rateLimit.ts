@@ -63,18 +63,33 @@ export const LIMITS = {
 export type LimitResult = { allowed: boolean; retryAfterSeconds: number };
 
 /**
- * The visitor's network address, as reported by the hosting platform.
- * On Vercel only Vercel's own headers are trusted. Elsewhere the reverse
- * proxy is expected to set X-Real-IP (or append to X-Forwarded-For); with no
+ * Picks the visitor's network address out of the request headers.
+ *
+ * On Vercel only the headers Vercel itself writes are used:
+ * X-Vercel-Forwarded-For, then X-Real-IP. X-Forwarded-For is ignored there,
+ * because its first entry is whatever the client chose to send.
+ *
+ * Elsewhere the reverse proxy is expected to set X-Real-IP; failing that, the
+ * last X-Forwarded-For entry is the one the nearest proxy added. With no
  * proxy at all a client can choose this value, so put one in front.
  */
+export function addressFromHeaders(get: (name: string) => string | null | undefined, onVercel: boolean): string {
+  const entries = (name: string) =>
+    (get(name) ?? '')
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+  if (onVercel) {
+    return entries('x-vercel-forwarded-for')[0] || entries('x-real-ip')[0] || 'unknown';
+  }
+  const forwarded = entries('x-forwarded-for');
+  return entries('x-real-ip')[0] || forwarded[forwarded.length - 1] || 'unknown';
+}
+
+/** The visitor's network address, as reported by the hosting platform. */
 export async function clientAddress(): Promise<string> {
   const list = await headers();
-  const forwarded = list.get('x-forwarded-for')?.split(',').map((part) => part.trim()).filter(Boolean) ?? [];
-  if (process.env.VERCEL) {
-    return list.get('x-vercel-forwarded-for')?.split(',')[0]?.trim() || forwarded[0] || 'unknown';
-  }
-  return list.get('x-real-ip')?.trim() || forwarded[forwarded.length - 1] || 'unknown';
+  return addressFromHeaders((name) => list.get(name), Boolean(process.env.VERCEL));
 }
 
 function windowStart(limit: Limit, now: number): Date {

@@ -72,6 +72,7 @@ const { chromium, BASE, STATE, OWNER, SETUP_TOKEN, APP_SECRET, DATABASE_URL, che
   await page.waitForURL('**/admin/event-types**');
   await page.waitForSelector('text=30 Minute Meeting');
   errors.length = 0; // the refusals above were expected, and the browser logs each one
+  check('the token is accepted although the setting has whitespace after it', sql('select count(*) from owner') === '1');
   check('owner created with a starter event type and schedule', sql('select count(*) from event_types') === '1' && sql('select count(*) from schedules where is_default') === '1');
   check('password is stored hashed', sql('select password_hash from owner').startsWith('scrypt$'));
   await shot(page, 'admin-event-types', true);

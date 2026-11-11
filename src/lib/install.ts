@@ -51,7 +51,7 @@ export function setupTokenProblem(env: Record<string, string | undefined> = proc
   if (configuredSetupToken(env)) return null;
   return {
     id: 'setup_token_missing',
-    title: env.SETUP_TOKEN ? 'SETUP_TOKEN is too short' : 'SETUP_TOKEN is not set',
+    title: env.SETUP_TOKEN?.trim() ? 'SETUP_TOKEN is too short' : 'SETUP_TOKEN is not set',
     fix: `Add a setting named SETUP_TOKEN with a random value of at least ${MIN_SETUP_TOKEN_LENGTH} characters. You type it once, on the form that creates your account, to prove the site is yours; nobody without it can claim the site. You can remove the setting once your account exists.`,
   };
 }
