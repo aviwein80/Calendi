@@ -1,10 +1,29 @@
+import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Skeleton } from './ui';
 
-/** Centres public content on the page. */
+/** "Privacy · Terms" links at the bottom of every public page. */
+function LegalFooter() {
+  return (
+    <footer className="px-4 pb-6 pt-2 text-center text-xs text-zinc-500">
+      <Link href="/privacy" className="underline-offset-2 hover:underline">
+        Privacy
+      </Link>
+      <span aria-hidden> · </span>
+      <Link href="/terms" className="underline-offset-2 hover:underline">
+        Terms
+      </Link>
+    </footer>
+  );
+}
+
+/** Centres public content on the page, with the privacy and terms links underneath. */
 export function PublicFrame({ children }: { children: ReactNode }) {
   return (
-    <main className="flex flex-1 flex-col items-center justify-center px-4 py-8 sm:py-12">{children}</main>
+    <>
+      <main className="flex flex-1 flex-col items-center justify-center px-4 py-8 sm:py-12">{children}</main>
+      <LegalFooter />
+    </>
   );
 }
 
