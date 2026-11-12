@@ -2,24 +2,28 @@
 
 import { useState } from 'react';
 import {
+  addEmailAction,
   changePasswordAction,
+  confirmEmailAction,
+  removeEmailAction,
   saveEmailAction,
   saveProfileAction,
   saveWebhookAction,
+  sendEmailCodeAction,
+  setNotificationEmailAction,
   testEmailAction,
   testWebhookAction,
 } from '@/app/actions/admin';
 import { EVENT_COLORS } from '@/lib/constants';
 import { ActionButton, ActionForm, CopyButton, FormMessage, SubmitButton } from './client';
 import { TimezoneSelect } from './TimezoneSelect';
-import { cx, Field, Input, Notice, Select, Textarea } from './ui';
+import { Badge, cx, Field, Input, Notice, Select, Textarea } from './ui';
 
 export function ProfileForm({
   owner,
 }: {
   owner: {
     name: string;
-    email: string;
     timezone: string;
     welcome_message: string;
     avatar_url: string;
@@ -32,9 +36,6 @@ export function ProfileForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Name" htmlFor="name" hint="Shown on your booking pages.">
           <Input id="name" name="name" required maxLength={120} defaultValue={owner.name} />
-        </Field>
-        <Field label="Email" htmlFor="email" hint="Your sign-in, and where notifications go.">
-          <Input id="email" name="email" type="email" required maxLength={200} defaultValue={owner.email} />
         </Field>
         <Field label="Time zone" htmlFor="timezone" hint="Used for your bookings list and notifications.">
           <TimezoneSelect id="timezone" name="timezone" defaultValue={owner.timezone} />
@@ -225,5 +226,90 @@ export function PasswordForm({ minPassword }: { minPassword: number }) {
         <FormMessage />
       </div>
     </ActionForm>
+  );
+}
+
+export type AddressRow = { id: string; email: string; verified: boolean; codeSent: boolean; notifications: boolean };
+
+/** The owner's email addresses: sign-in, confirmation and the notifications address. */
+export function EmailAddresses({ addresses, canSend }: { addresses: AddressRow[]; canSend: boolean }) {
+  return (
+    <div className="space-y-4">
+      {!canSend && (
+        <Notice tone="amber">
+          Email sending is not set up, so a new address cannot be confirmed yet and cannot be used to sign in. Set
+          it up under Email notifications below, then press “Send code”.
+        </Notice>
+      )}
+      <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200">
+        {addresses.map((address) => (
+          <li key={address.id} className="space-y-2 px-4 py-3" data-address={address.email}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="truncate text-sm font-medium text-zinc-900">{address.email}</span>
+                {address.verified ? <Badge tone="green">Confirmed</Badge> : <Badge tone="amber">Unverified</Badge>}
+                {address.notifications && <Badge tone="brand">Notifications</Badge>}
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                {address.verified && !address.notifications && (
+                  <ActionButton variant="ghost" size="sm" action={() => setNotificationEmailAction(address.id)}>
+                    Use for notifications
+                  </ActionButton>
+                )}
+                {!address.verified && (
+                  <ActionButton variant="ghost" size="sm" disabled={!canSend} action={() => sendEmailCodeAction(address.id)}>
+                    {address.codeSent ? 'Send a new code' : 'Send code'}
+                  </ActionButton>
+                )}
+                {!address.notifications && (
+                  <ActionButton
+                    variant="ghost"
+                    size="sm"
+                    confirm={`Remove ${address.email}? It will no longer work for signing in.`}
+                    action={() => removeEmailAction(address.id)}
+                  >
+                    Remove
+                  </ActionButton>
+                )}
+              </div>
+            </div>
+            {!address.verified && address.codeSent && (
+              <ActionForm action={confirmEmailAction} className="flex flex-wrap items-center gap-2">
+                <input type="hidden" name="id" value={address.id} />
+                <Input
+                  name="code"
+                  aria-label={`Code sent to ${address.email}`}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={9}
+                  required
+                  placeholder="6-digit code"
+                  className="w-36"
+                />
+                <SubmitButton size="sm" variant="secondary">
+                  Confirm
+                </SubmitButton>
+                <FormMessage />
+              </ActionForm>
+            )}
+          </li>
+        ))}
+      </ul>
+      <ActionForm action={addEmailAction} className="flex flex-wrap items-start gap-2" clearOnSuccess>
+        <Input
+          name="email"
+          type="email"
+          aria-label="Add an email address"
+          required
+          maxLength={200}
+          placeholder="another@address.com"
+          className="w-full sm:w-72"
+        />
+        <SubmitButton variant="secondary">Add address</SubmitButton>
+        <div className="basis-full">
+          <FormMessage />
+        </div>
+      </ActionForm>
+    </div>
   );
 }

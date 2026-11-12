@@ -1,16 +1,20 @@
 import { cookies } from 'next/headers';
 import { NextResponse, type NextRequest } from 'next/server';
-import { oauthClient } from '@/lib/calendars';
+import { accountSummary, oauthClient } from '@/lib/calendars';
 import { googleAuthorizeUrl } from '@/lib/calendars/google';
 import { microsoftAuthorizeUrl } from '@/lib/calendars/microsoft';
+import { oauthRedirectUri } from '@/lib/calendars/setup';
 import { randomToken, sign } from '@/lib/crypto';
 import { getBaseUrl } from '@/lib/env';
 import { currentOwner } from '@/lib/session';
+import { getCalendarAccount } from '@/lib/store';
 
 // GET /api/oauth/google/start (or /microsoft/start): sends the signed-in owner
-// to the provider's consent screen.
+// straight to the provider's sign-in, which always starts with its account
+// picker, so the same button adds a second or third account.
+// ?account=<id> reconnects that account: the picker is pre-filled with it.
 
-export async function GET(_request: NextRequest, context: RouteContext<'/api/oauth/[provider]/start'>) {
+export async function GET(request: NextRequest, context: RouteContext<'/api/oauth/[provider]/start'>) {
   const { provider } = await context.params;
   const baseUrl = await getBaseUrl();
   if (!(await currentOwner())) return NextResponse.redirect(`${baseUrl}/admin/login`);
@@ -18,10 +22,15 @@ export async function GET(_request: NextRequest, context: RouteContext<'/api/oau
     return NextResponse.redirect(`${baseUrl}/admin/calendars`);
   }
 
-  const client = await oauthClient(provider);
-  if (!client) {
-    const message = encodeURIComponent('Add the app credentials first (see the setup steps below).');
-    return NextResponse.redirect(`${baseUrl}/admin/calendars?error=${message}`);
+  const client = oauthClient(provider);
+  // Not set up yet: the Calendars page explains the one-time setup.
+  if (!client) return NextResponse.redirect(`${baseUrl}/admin/calendars?setup=${provider}#connect`);
+
+  let loginHint: string | undefined;
+  const accountId = request.nextUrl.searchParams.get('account') ?? '';
+  if (/^[0-9a-f-]{36}$/i.test(accountId)) {
+    const account = await getCalendarAccount(accountId);
+    if (account?.provider === provider) loginHint = accountSummary(account).email || undefined;
   }
 
   // The state value ties the provider's reply to this browser.
@@ -35,10 +44,10 @@ export async function GET(_request: NextRequest, context: RouteContext<'/api/oau
     maxAge: 600,
   });
 
-  const redirectUri = `${baseUrl}/api/oauth/${provider}/callback`;
+  const redirectUri = oauthRedirectUri(provider, baseUrl);
   const url =
     provider === 'google'
-      ? googleAuthorizeUrl(client, redirectUri, state)
-      : microsoftAuthorizeUrl(client, redirectUri, state);
+      ? googleAuthorizeUrl(client, redirectUri, state, loginHint)
+      : microsoftAuthorizeUrl(client, redirectUri, state, loginHint);
   return NextResponse.redirect(url);
 }

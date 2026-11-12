@@ -2,8 +2,7 @@ import { ChevronRight, Clock } from 'lucide-react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { connection } from 'next/server';
-import { Suspense } from 'react';
-import { PublicFrame, PublicSkeleton } from '@/components/PublicFrame';
+import { PublicFrame } from '@/components/PublicFrame';
 import { Avatar, brandStyle } from '@/components/ui';
 import { formatDuration, LOCATION_LABELS } from '@/lib/format';
 import { installStatus } from '@/lib/install';
@@ -13,12 +12,14 @@ import { listEventTypes } from '@/lib/store';
 
 const SETUP_PROBLEMS = ['database_missing', 'secret_missing', 'setup_token_missing', 'database_empty'];
 
-export default function HomePage() {
+// Reads the install state, so it is rendered for every request with no
+// build-time shell (see "Install-state pages" in CLAUDE.md).
+export const instant = false;
+
+export default async function HomePage() {
   return (
     <PublicFrame>
-      <Suspense fallback={<PublicSkeleton />}>
-        <Profile />
-      </Suspense>
+      <Profile />
     </PublicFrame>
   );
 }

@@ -1,11 +1,12 @@
 import type { Metadata } from 'next';
 import { Suspense } from 'react';
 import { logoutAction } from '@/app/actions/auth';
-import { EmailForm, PasswordForm, ProfileForm, WebhookForm } from '@/components/SettingsForms';
+import { EmailAddresses, EmailForm, PasswordForm, ProfileForm, WebhookForm } from '@/components/SettingsForms';
 import { Button, PageHeader, Section, Skeleton } from '@/components/ui';
 import { MIN_PASSWORD_LENGTH } from '@/lib/constants';
+import { emailConfig } from '@/lib/email';
 import { requireOwner } from '@/lib/session';
-import { readIntegrations } from '@/lib/store';
+import { listOwnerEmails, readIntegrations } from '@/lib/store';
 import { webhookSigningSecret } from '@/lib/webhook';
 
 export const metadata: Metadata = { title: 'Settings' };
@@ -24,6 +25,7 @@ export default function SettingsPage() {
 async function Content() {
   const owner = await requireOwner();
   const email = readIntegrations(owner).email;
+  const addresses = await listOwnerEmails();
   const emailFromEnv = Boolean(
     process.env.EMAIL_FROM && (process.env.RESEND_API_KEY || process.env.SMTP_HOST),
   );
@@ -34,7 +36,6 @@ async function Content() {
         <ProfileForm
           owner={{
             name: owner.name,
-            email: owner.email,
             timezone: owner.timezone,
             welcome_message: owner.welcome_message,
             avatar_url: owner.avatar_url,
@@ -42,6 +43,24 @@ async function Content() {
           }}
         />
       </Section>
+
+      <section id="emails" className="scroll-mt-6">
+        <Section
+          title="Email addresses"
+          description="Sign in with any confirmed address, using the same password. Booking alerts go to the notifications address; a meeting type can send its alerts to another one."
+        >
+          <EmailAddresses
+            canSend={Boolean(emailConfig(owner))}
+            addresses={addresses.map((a) => ({
+              id: a.id,
+              email: a.email,
+              verified: Boolean(a.verified_at),
+              codeSent: Boolean(a.code_sent_at),
+              notifications: a.email.toLowerCase() === owner.email.toLowerCase(),
+            }))}
+          />
+        </Section>
+      </section>
 
       <Section
         title="Email notifications"

@@ -41,7 +41,13 @@ export type OAuthTokens = {
 };
 
 export type OAuthCredentials = OAuthTokens & { email: string };
-export type CalDavCredentials = { serverUrl: string; username: string; password: string };
+export type CalDavCredentials = {
+  serverUrl: string;
+  username: string;
+  password: string;
+  /** Set for accounts added with "Connect iCloud". */
+  service?: 'icloud';
+};
 export type IcsCredentials = { url: string };
 
 export type OAuthClient = { clientId: string; clientSecret: string; tenant?: string };

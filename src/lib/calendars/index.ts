@@ -13,18 +13,21 @@ import {
   saveAccountCredentials,
   setAccountStatus,
   setBookingTarget,
+  setCalendarConflicts,
 } from '../store';
-import type { CalendarAccount, CalendarProviderId, Interval } from '../types';
-import { caldavProvider } from './caldav';
+import type { CalendarAccount, CalendarProviderId, CalendarRow, EventType, Interval } from '../types';
+import { caldavProvider, caldavService } from './caldav';
 import { googleProvider, googleRefresh } from './google';
 import { icsProvider } from './ics';
 import { microsoftProvider, microsoftRefresh } from './microsoft';
+import { oauthClientFromEnv, type OAuthProviderId } from './setup';
 import {
   calendarCacheMs,
   ProviderError,
   type CalendarProvider,
   type CreatedEvent,
   type EventInput,
+  type CalDavCredentials,
   type OAuthClient,
   type OAuthCredentials,
 } from './types';
@@ -45,24 +48,51 @@ export const PROVIDER_NAMES: Record<CalendarProviderId, string> = {
   google: 'Google Calendar',
   microsoft: 'Outlook / Microsoft 365',
   caldav: 'CalDAV',
-  ics: 'Calendar feed',
+  ics: 'Calendar link',
 };
 
-/** The OAuth app credentials: environment variables win, then what was saved in the admin. */
-export async function oauthClient(provider: 'google' | 'microsoft'): Promise<OAuthClient | null> {
-  if (provider === 'google') {
-    if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-      return { clientId: process.env.GOOGLE_CLIENT_ID, clientSecret: process.env.GOOGLE_CLIENT_SECRET };
-    }
-  } else if (process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) {
-    return {
-      clientId: process.env.MICROSOFT_CLIENT_ID,
-      clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
-      tenant: process.env.MICROSOFT_TENANT_ID,
-    };
-  }
+/**
+ * The Google or Microsoft app credentials for new connections. They come only
+ * from the environment (GOOGLE_CLIENT_ID / _SECRET, MICROSOFT_CLIENT_ID /
+ * _SECRET), set once by the owner; null until they are.
+ */
+export function oauthClient(provider: OAuthProviderId): OAuthClient | null {
+  return oauthClientFromEnv(provider);
+}
+
+/**
+ * The credentials used to refresh an account's tokens. Earlier versions let
+ * the owner paste them into the admin instead; accounts connected that way
+ * keep working with what was saved until the environment variables are set.
+ */
+async function refreshClient(provider: OAuthProviderId): Promise<OAuthClient | null> {
+  const fromEnv = oauthClientFromEnv(provider);
+  if (fromEnv) return fromEnv;
   const saved = (await getIntegrations())[provider];
   return saved?.clientId && saved.clientSecret ? saved : null;
+}
+
+/** Whether accounts still refresh with app credentials saved by an earlier version. */
+export async function usesSavedAppCredentials(provider: OAuthProviderId): Promise<boolean> {
+  if (oauthClientFromEnv(provider)) return false;
+  return Boolean((await getIntegrations())[provider]?.clientId);
+}
+
+/** What the Calendars page shows for an account: the service, and which login it is. */
+export function accountSummary(account: CalendarAccount): { service: string; email: string } {
+  try {
+    if (account.provider === 'google' || account.provider === 'microsoft') {
+      const credentials = decryptJson<OAuthCredentials>(account.credentials);
+      return { service: PROVIDER_NAMES[account.provider], email: credentials.email || account.label };
+    }
+    if (account.provider === 'caldav') {
+      const credentials = decryptJson<CalDavCredentials>(account.credentials);
+      return { service: caldavService(credentials), email: credentials.username };
+    }
+  } catch {
+    // APP_SECRET changed since it was saved: fall back to what is stored in the clear.
+  }
+  return { service: PROVIDER_NAMES[account.provider], email: account.provider === 'ics' ? '' : account.label };
 }
 
 function isOAuth(account: CalendarAccount): boolean {
@@ -78,14 +108,11 @@ async function credentialsFor(account: CalendarAccount, forceRefresh: boolean): 
   const oauth = credentials as OAuthCredentials;
   if (!forceRefresh && oauth.expiresAt - Date.now() > 120_000) return oauth;
 
-  const provider = account.provider as 'google' | 'microsoft';
-  const client = await oauthClient(provider);
+  const provider = account.provider as OAuthProviderId;
+  const client = await refreshClient(provider);
   if (!client) {
-    throw new ProviderError(
-      `The ${PROVIDER_NAMES[provider]} app credentials are missing. Add them again under Calendars.`,
-      0,
-      true,
-    );
+    const names = provider === 'google' ? 'GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET' : 'MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET';
+    throw new ProviderError(`The ${PROVIDER_NAMES[provider]} app settings (${names}) are missing.`, 0, true);
   }
   // Several requests can find the token expired at the same moment. They share
   // one refresh, so a provider that hands out single-use refresh tokens is
@@ -201,18 +228,41 @@ export async function getCalendarBusy(
   return perAccount.flat();
 }
 
-/** Which provider new bookings are saved to, if any. */
-export async function bookingTargetProvider(): Promise<CalendarProviderId | null> {
-  const target = await getBookingTarget();
+/**
+ * The calendar a meeting type's new bookings are added to: its own choice if
+ * that calendar can still take bookings, otherwise the default one. Pure, so
+ * the rule can be unit-tested.
+ */
+export function pickBookingCalendar(
+  eventType: Pick<EventType, 'calendar_id'> | null | undefined,
+  calendars: Pick<CalendarRow, 'id' | 'can_write' | 'is_booking_target'>[],
+): string | null {
+  const own = eventType?.calendar_id ? calendars.find((c) => c.id === eventType.calendar_id && c.can_write) : null;
+  if (own) return own.id;
+  return calendars.find((c) => c.is_booking_target && c.can_write)?.id ?? null;
+}
+
+async function bookingCalendar(eventType: Pick<EventType, 'calendar_id'> | null | undefined): Promise<CalendarRow | null> {
+  const calendars = await listCalendars();
+  const id = pickBookingCalendar(eventType, calendars);
+  return calendars.find((c) => c.id === id) ?? null;
+}
+
+/** Which provider a meeting type's new bookings are saved to, if any. */
+export async function bookingTargetProvider(
+  eventType?: Pick<EventType, 'calendar_id'> | null,
+): Promise<CalendarProviderId | null> {
+  const target = await bookingCalendar(eventType);
   if (!target) return null;
   return (await getCalendarAccount(target.account_id))?.provider ?? null;
 }
 
-/** Adds the booking to the owner's chosen calendar. Null when none is chosen. */
+/** Adds the booking to the calendar chosen for its meeting type. Null when there is none. */
 export async function createCalendarEvent(
   event: EventInput,
+  eventType: Pick<EventType, 'calendar_id'> | null,
 ): Promise<{ calendarId: string; created: CreatedEvent } | null> {
-  const target = await getBookingTarget();
+  const target = await bookingCalendar(eventType);
   if (!target) return null;
   const account = await getCalendarAccount(target.account_id);
   const provider = account ? providers[account.provider] : null;
@@ -255,21 +305,57 @@ export async function deleteCalendarEvent(calendarId: string, externalEventId: s
   clearBusyCache();
 }
 
+/**
+ * New calendars start with "check for conflicts" on. A few special calendars
+ * (birthdays, some shared ones) cannot report busy times at all; left on, one
+ * of those would pause every booking page, since an unreadable calendar is
+ * treated as "no times can be offered". So each new calendar is tried once
+ * here, and any the provider cannot read are switched off instead. The main
+ * calendar is never switched off: if that cannot be read, connecting fails.
+ */
+async function switchOffUnreadable(account: CalendarAccount, credentials: unknown, added: CalendarRow[]): Promise<void> {
+  const provider = providers[account.provider];
+  const from = new Date();
+  const to = new Date(from.getTime() + 86_400_000);
+  const checked = added.filter((c) => c.check_conflicts);
+  if (checked.length === 0) return;
+  try {
+    await provider.getBusy(credentials, checked.map((c) => c.external_id), from, to, 'UTC', true);
+    return;
+  } catch {
+    // One of them (or the connection) failed: find out which.
+  }
+  await Promise.all(
+    checked.map(async (calendar) => {
+      try {
+        await provider.getBusy(credentials, [calendar.external_id], from, to, 'UTC', true);
+      } catch {
+        await setCalendarConflicts(calendar.id, false);
+      }
+    }),
+  );
+}
+
 async function syncCalendars(account: CalendarAccount, credentials: unknown): Promise<void> {
   const found = await providers[account.provider].listCalendars(credentials);
-  await replaceAccountCalendars(
+  const added = await replaceAccountCalendars(
     account.id,
     found.map((calendar) => ({
       externalId: calendar.externalId,
       name: calendar.name,
       color: calendar.color,
       canWrite: calendar.canWrite && Boolean(providers[account.provider].createEvent),
-      // Holiday and other read-only calendars start unchecked.
-      checkByDefault: calendar.primary || calendar.canWrite || account.provider === 'ics',
+      checkByDefault: true,
     })),
   );
+  const primaryIds = new Set(found.filter((c) => c.primary).map((c) => c.externalId));
+  await switchOffUnreadable(
+    account,
+    credentials,
+    added.filter((c) => !primaryIds.has(c.external_id)),
+  );
 
-  // The first writable calendar to be connected becomes where bookings are saved.
+  // Until one is chosen, bookings go to the main calendar of the first account connected.
   if (!(await getBookingTarget())) {
     const primary = found.find((c) => c.primary && c.canWrite) ?? found.find((c) => c.canWrite);
     if (primary && providers[account.provider].createEvent) {
@@ -294,7 +380,7 @@ export async function connectAccount(
 ): Promise<CalendarAccount> {
   await providers[provider].listCalendars(credentials);
   const existing = (await listCalendarAccounts()).find(
-    (a) => a.provider === provider && a.label === label,
+    (a) => a.provider === provider && a.label.toLowerCase() === label.toLowerCase(),
   );
   let account: CalendarAccount;
   if (existing) {

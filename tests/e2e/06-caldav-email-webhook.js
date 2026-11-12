@@ -1,16 +1,20 @@
-// CalDAV (how Apple iCloud, Fastmail and Nextcloud are connected), against a
-// real local CalDAV server (Radicale). Because CalDAV calendars do not send
+// "Connect iCloud" (CalDAV, how Apple iCloud is connected), against a real
+// local CalDAV server (Radicale) standing in for Apple's: only the Apple ID
+// and an app-specific password are typed, and the calendars are found from
+// there. Because CalDAV calendars do not send
 // invitations themselves, this is also where Calendi's own emails and the
 // webhook are checked, along with custom questions, guests and buffers.
 const crypto = require('crypto');
 const { chromium, BASE, D, compact, icsLocal, check, finish, daySlots, mock, sql, reset, admin, visitor, book, pickDay, offered, shot, tokenHash } = require('./lib');
 
 const CALDAV = process.env.E2E_CALDAV_URL || 'http://127.0.0.1:5232';
+const APPLE_ID = 'avi@icloud.test';
+const HOME = `/${APPLE_ID}/work/`;
 const dav = (method, path, body) =>
   fetch(`${CALDAV}${path}`, {
     method,
     headers: {
-      Authorization: 'Basic ' + Buffer.from('avi:secret').toString('base64'),
+      Authorization: 'Basic ' + Buffer.from(`${APPLE_ID}:secret`).toString('base64'),
       'Content-Type': 'text/calendar',
       Depth: '1',
     },
@@ -21,34 +25,36 @@ const vevent = (lines) =>
 
 (async () => {
   await reset();
-  const listing = await (await dav('PROPFIND', '/avi/work/')).text();
-  for (const match of listing.matchAll(/<href>(\/avi\/work\/[^<]+\.ics)<\/href>/g)) await dav('DELETE', match[1]);
+  const listing = await (await dav('PROPFIND', HOME)).text();
+  for (const match of listing.matchAll(/<href>([^<]+\/work\/[^<]+\.ics)<\/href>/g)) await dav('DELETE', match[1]);
 
   const browser = await chromium.launch();
   const { page } = await admin(browser);
   console.log('CalDAV, email and webhook');
 
   await page.goto(`${BASE}/admin/calendars`);
-  await page.click('summary:text-is("Connect")');
-  await page.selectOption('#caldav-preset', 'other');
-  await page.fill('#caldav-url', `${CALDAV}/`);
-  await page.fill('#caldav-user', 'avi');
-  await page.fill('#caldav-pass', 'wrong-password');
-  await page.click('form:has(#caldav-user) button[type=submit]');
-  await page.waitForSelector('text=rejected the username or password');
+  await page.click('#connect >> text=Connect iCloud');
+  await page.waitForSelector('#icloud-email');
+  check('the iCloud form asks only for the Apple ID and an app-specific password', (await page.locator('#connect form input:not([type=hidden])').count()) === 2 && (await page.locator('#caldav-url').count()) === 0);
+  check('it links straight to appleid.apple.com', (await page.locator('#connect a[href^="https://appleid.apple.com"]').count()) === 1);
+  await page.fill('#icloud-email', APPLE_ID);
+  await page.fill('#icloud-password', 'wrong-password');
+  await page.click('button:has-text("Connect iCloud")');
+  await page.waitForSelector('text=Apple did not accept that Apple ID and password');
   check('a wrong password is rejected with a clear message', true);
-  check('nothing is saved for the failed attempt, and the form keeps its values', sql('select count(*) from calendar_accounts') === '0' && (await page.inputValue('#caldav-user')) === 'avi');
-  await page.fill('#caldav-pass', 'secret');
-  await page.click('form:has(#caldav-user) button[type=submit]');
-  await page.waitForSelector('text=Bookings saved here');
-  await shot(page, 'calendars-caldav', true);
+  check('nothing is saved for the failed attempt, and the form keeps its values', sql('select count(*) from calendar_accounts') === '0' && (await page.inputValue('#icloud-email')) === APPLE_ID);
+  await page.fill('#icloud-password', 'secret');
+  await page.click('button:has-text("Connect iCloud")');
+  await page.waitForSelector(`[data-account="${APPLE_ID}"]`);
+  await shot(page, 'calendars-icloud', true);
+  check('the account is shown as Apple iCloud with the Apple ID', (await page.locator(`[data-account="${APPLE_ID}"] >> text=Apple iCloud`).count()) === 1);
   check('the "Work" calendar is found and chosen for bookings', sql("select name || '|' || is_booking_target::text from calendars") === 'Work|true');
   const stored = sql('select credentials from calendar_accounts');
   check('the password is encrypted in the database', stored.startsWith('v1.') && !stored.includes('secret'));
 
   // Events made in the calendar app: lunch on Friday, and a weekly Friday gym slot.
-  await dav('PUT', '/avi/work/lunch.ics', vevent(['UID:lunch', `DTSTART;TZID=America/New_York:${icsLocal(D.fri.at('13:00'))}`, `DTEND;TZID=America/New_York:${icsLocal(D.fri.at('14:00'))}`, 'SUMMARY:Lunch']));
-  await dav('PUT', '/avi/work/gym.ics', vevent(['UID:gym', `DTSTART;TZID=America/New_York:${icsLocal(D.fri.plus(-49).at('16:00'))}`, `DTEND;TZID=America/New_York:${icsLocal(D.fri.plus(-49).at('17:00'))}`, 'RRULE:FREQ=WEEKLY;BYDAY=FR', 'SUMMARY:Gym']));
+  await dav('PUT', `${HOME}lunch.ics`, vevent(['UID:lunch', `DTSTART;TZID=America/New_York:${icsLocal(D.fri.at('13:00'))}`, `DTEND;TZID=America/New_York:${icsLocal(D.fri.at('14:00'))}`, 'SUMMARY:Lunch']));
+  await dav('PUT', `${HOME}gym.ics`, vevent(['UID:gym', `DTSTART;TZID=America/New_York:${icsLocal(D.fri.plus(-49).at('16:00'))}`, `DTEND;TZID=America/New_York:${icsLocal(D.fri.plus(-49).at('17:00'))}`, 'RRULE:FREQ=WEEKLY;BYDAY=FR', 'SUMMARY:Gym']));
   const friday = await daySlots(D.fri);
   check('a CalDAV event blocks 13:00-14:00', !friday.times.includes('13:00') && !friday.times.includes('13:30') && friday.times.includes('14:00'), JSON.stringify(friday.times));
   check('a weekly CalDAV event blocks 16:00 and 16:30', !friday.times.includes('16:00') && !friday.times.includes('16:30') && friday.times.includes('15:30'));
@@ -120,7 +126,7 @@ const vevent = (lines) =>
   });
   await guest.page.waitForSelector('text=A confirmation has been sent to jane@example.com');
   const id = sql(`select id from bookings where token_hash='${tokenHash(token)}'`);
-  const saved = await dav('GET', `/avi/work/${id}.ics`);
+  const saved = await dav('GET', `${HOME}${id}.ics`);
   const ics = await saved.text();
   check('the booking is saved into the CalDAV calendar', saved.status === 200 && ics.includes(`DTSTART:${compact(D.fri.at('10:00'))}`) && ics.includes(`DTEND:${compact(D.fri.at('10:45'))}`), ics.slice(0, 300));
   check('the calendar entry has the details but no attendee lines', ics.includes('SUMMARY:Discovery Call: Jane Invitee and Avi Tester') && ics.replace(/\r\n /g, '').includes('Marketing automation') && !ics.includes('ATTENDEE'));
@@ -160,13 +166,13 @@ const vevent = (lines) =>
   await guest.page.click('ul[aria-label="Available times"] button:text-is("2:00 PM")');
   await guest.page.click('button:text-is("Confirm")');
   await guest.page.waitForSelector('text=Your meeting was moved');
-  const movedIcs = await (await dav('GET', `/avi/work/${id}.ics`)).text();
+  const movedIcs = await (await dav('GET', `${HOME}${id}.ics`)).text();
   check('the CalDAV entry is moved', movedIcs.includes(`DTSTART:${compact(D.fri.at('14:00'))}`) && movedIcs.includes('SEQUENCE:1'), movedIcs.slice(0, 200));
   await guest.page.goto(`${BASE}/booking/${token}/cancel`);
   await guest.page.fill('#reason', 'Conflict');
   await guest.page.click('button:has-text("Cancel meeting")');
   await guest.page.waitForSelector('text=This meeting was cancelled');
-  check('the CalDAV entry is removed', (await dav('GET', `/avi/work/${id}.ics`)).status === 404);
+  check('the CalDAV entry is removed', (await dav('GET', `${HOME}${id}.ics`)).status === 404);
   state = await mock('/state');
   const events = state.webhooks.map((w) => w.body.event);
   check('webhooks were sent for created, rescheduled and cancelled', ['booking.created', 'booking.rescheduled', 'booking.cancelled'].every((e) => events.includes(e)), JSON.stringify(events));

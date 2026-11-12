@@ -8,6 +8,7 @@ import type {
   EventType,
   Integrations,
   Owner,
+  OwnerEmail,
   Schedule,
 } from './types';
 
@@ -21,17 +22,86 @@ export async function getOwner(): Promise<Owner | null> {
   return rows[0] ?? null;
 }
 
+/** Creates the owner, with their first email address already verified. */
 export async function createOwner(input: {
   name: string;
   email: string;
   passwordHash: string;
   timezone: string;
 }): Promise<Owner> {
-  const rows = await db()<Owner[]>`
-    insert into owner (id, name, email, password_hash, timezone)
-    values (1, ${input.name}, ${input.email}, ${input.passwordHash}, ${input.timezone})
+  return db().begin(async (tx) => {
+    const rows = await tx<Owner[]>`
+      insert into owner (id, name, email, password_hash, timezone)
+      values (1, ${input.name}, ${input.email}, ${input.passwordHash}, ${input.timezone})
+      returning *`;
+    await tx`
+      insert into owner_emails (email, verified_at) values (${input.email}, now())
+      on conflict do nothing`;
+    return rows[0];
+  });
+}
+
+// ── Owner email addresses ────────────────────────────────────────────────
+
+export async function listOwnerEmails(): Promise<OwnerEmail[]> {
+  return db()<OwnerEmail[]>`select * from owner_emails order by created_at, email`;
+}
+
+export async function getOwnerEmail(id: string): Promise<OwnerEmail | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  const rows = await db()<OwnerEmail[]>`select * from owner_emails where id = ${id}`;
+  return rows[0] ?? null;
+}
+
+/** The addresses that may be used to sign in. */
+export async function listVerifiedEmails(): Promise<string[]> {
+  const rows = await db()<{ email: string }[]>`
+    select email from owner_emails where verified_at is not null order by created_at`;
+  return rows.map((row) => row.email);
+}
+
+/** Null when the address is already on the account. */
+export async function insertOwnerEmail(email: string): Promise<OwnerEmail | null> {
+  const rows = await db()<OwnerEmail[]>`
+    insert into owner_emails (email) values (${email})
+    on conflict do nothing
     returning *`;
-  return rows[0];
+  return rows[0] ?? null;
+}
+
+export async function setOwnerEmailCode(id: string, codeHash: string, expiresAt: Date): Promise<void> {
+  await db()`
+    update owner_emails
+    set code_hash = ${codeHash}, code_expires_at = ${expiresAt}, code_attempts = 0, code_sent_at = now()
+    where id = ${id} and verified_at is null`;
+}
+
+/** Counts a wrong guess and returns how many have been made against the current code. */
+export async function countOwnerEmailAttempt(id: string): Promise<number> {
+  const rows = await db()<{ code_attempts: number }[]>`
+    update owner_emails set code_attempts = code_attempts + 1
+    where id = ${id} returning code_attempts`;
+  return rows[0]?.code_attempts ?? 0;
+}
+
+export async function markOwnerEmailVerified(id: string): Promise<void> {
+  await db()`
+    update owner_emails
+    set verified_at = now(), code_hash = '', code_expires_at = null, code_attempts = 0
+    where id = ${id}`;
+}
+
+/**
+ * Removes an address. Meeting types that sent their alerts to it go back to
+ * the notifications address.
+ */
+export async function deleteOwnerEmail(id: string): Promise<void> {
+  await db().begin(async (tx) => {
+    const rows = await tx<{ email: string }[]>`delete from owner_emails where id = ${id} returning email`;
+    if (rows[0]) {
+      await tx`update event_types set notify_email = '' where lower(notify_email) = lower(${rows[0].email})`;
+    }
+  });
 }
 
 export async function updateOwner(
@@ -150,7 +220,8 @@ export async function getEventTypeBySlug(slug: string): Promise<EventType | null
   return rows[0] ?? null;
 }
 
-export type EventTypeInput = Omit<EventType, 'id' | 'created_at' | 'position'>;
+/** What the event type form saves. Its calendar is chosen on the Calendars page. */
+export type EventTypeInput = Omit<EventType, 'id' | 'created_at' | 'position' | 'calendar_id'>;
 
 export async function insertEventType(input: EventTypeInput): Promise<EventType> {
   const sql = db();
@@ -169,6 +240,18 @@ export async function updateEventType(id: string, input: Partial<EventTypeInput>
 
 export async function deleteEventType(id: string): Promise<void> {
   await db()`delete from event_types where id = ${id}`;
+}
+
+/** Which calendar this type's new bookings are added to (null: the default one). */
+export async function setEventTypeCalendar(id: string, calendarId: string | null): Promise<void> {
+  if (calendarId) {
+    await db()`
+      update event_types set calendar_id = c.id
+      from calendars c
+      where event_types.id = ${id} and c.id = ${calendarId} and c.can_write`;
+  } else {
+    await db()`update event_types set calendar_id = null where id = ${id}`;
+  }
 }
 
 // ── Calendars ────────────────────────────────────────────────────────────
@@ -226,7 +309,8 @@ export async function deleteCalendarAccount(id: string): Promise<void> {
 }
 
 export async function listCalendars(): Promise<CalendarRow[]> {
-  return db()<CalendarRow[]>`select * from calendars order by is_booking_target desc, lower(name)`;
+  // Within an account: where bookings go first, then calendars that can take bookings.
+  return db()<CalendarRow[]>`select * from calendars order by is_booking_target desc, can_write desc, lower(name)`;
 }
 
 export async function getCalendar(id: string): Promise<CalendarRow | null> {
@@ -239,29 +323,41 @@ export async function getBookingTarget(): Promise<CalendarRow | null> {
   return rows[0] ?? null;
 }
 
-/** Adds new calendars, refreshes names, and removes ones that no longer exist. */
+/**
+ * Adds new calendars, refreshes names, and removes ones that no longer exist.
+ * Returns the rows that were added just now.
+ */
 export async function replaceAccountCalendars(
   accountId: string,
   found: { externalId: string; name: string; color: string; canWrite: boolean; checkByDefault: boolean }[],
-): Promise<void> {
+): Promise<CalendarRow[]> {
   const sql = db();
-  await sql.begin(async (tx) => {
+  return sql.begin(async (tx) => {
     const keep = found.map((c) => c.externalId);
     if (keep.length > 0) {
       await tx`delete from calendars where account_id = ${accountId} and external_id not in ${tx(keep)}`;
     } else {
       await tx`delete from calendars where account_id = ${accountId}`;
     }
+    const added: CalendarRow[] = [];
     for (const calendar of found) {
-      await tx`
+      // xmax is 0 only on a freshly inserted row, so this tells new from updated.
+      const rows = await tx<(CalendarRow & { inserted: boolean })[]>`
         insert into calendars (account_id, external_id, name, color, can_write, check_conflicts)
         values (${accountId}, ${calendar.externalId}, ${calendar.name}, ${calendar.color},
                 ${calendar.canWrite}, ${calendar.checkByDefault})
         on conflict (account_id, external_id)
-        do update set name = excluded.name, color = excluded.color, can_write = excluded.can_write`;
+        do update set name = excluded.name, color = excluded.color, can_write = excluded.can_write
+        returning *, (xmax = 0) as inserted`;
+      const { inserted, ...row } = rows[0];
+      if (inserted) added.push(row);
     }
-    // A calendar that lost write access cannot stay the place bookings are saved.
+    // A calendar that lost write access cannot stay a place bookings are saved.
     await tx`update calendars set is_booking_target = false where is_booking_target and not can_write`;
+    await tx`
+      update event_types set calendar_id = null
+      where calendar_id in (select id from calendars where not can_write)`;
+    return added;
   });
 }
 

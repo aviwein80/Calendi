@@ -13,11 +13,29 @@ import {
 
 // CalDAV covers Apple iCloud, Fastmail, Nextcloud and most self-hosted
 // calendars. iCloud needs an app-specific password, not the Apple ID password.
+// Only the server's address is needed: the account's calendars are found from
+// there (the standard CalDAV discovery steps, which tsdav performs on login).
+
+/** iCloud's CalDAV address. ICLOUD_CALDAV_URL exists only so tests can point it at a stand-in. */
+export const icloudServerUrl = () => process.env.ICLOUD_CALDAV_URL || 'https://caldav.icloud.com';
 
 export const CALDAV_PRESETS = {
-  icloud: 'https://caldav.icloud.com',
   fastmail: 'https://caldav.fastmail.com/dav/',
 } as const;
+
+/** The name of the service behind a CalDAV connection, for display. */
+export function caldavService(credentials: Pick<CalDavCredentials, 'serverUrl' | 'service'>): string {
+  if (credentials.service === 'icloud') return 'Apple iCloud';
+  let host = '';
+  try {
+    host = new URL(credentials.serverUrl).host;
+  } catch {
+    // fall through
+  }
+  if (/(^|\.)icloud\.com$/i.test(host)) return 'Apple iCloud';
+  if (/(^|\.)fastmail\.com$/i.test(host)) return 'Fastmail';
+  return host ? `CalDAV (${host})` : 'CalDAV';
+}
 
 async function connect(credentials: CalDavCredentials): Promise<DAVClient> {
   const client = new DAVClient({

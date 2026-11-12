@@ -11,7 +11,12 @@ const fresh = () => ({
   webhooks: [],
   emails: [],
   smtp: [],
-  google: { events: [], tokenCalls: [], apiCalls: [], seq: 0, access: 0, failFreeBusy: false },
+  // Several Google accounts. The sign-in page "picks" nextAccount; each
+  // account has its own tokens, calendars and events.
+  google: {
+    events: [], tokenCalls: [], apiCalls: [], authQueries: [], seq: 0, access: 0,
+    failFreeBusy: false, nextAccount: 'avi@gmail.test', latest: {}, revoked: [],
+  },
   microsoft: { events: [], tokenCalls: [], apiCalls: [], seq: 0, access: 0 },
 });
 const state = fresh();
@@ -68,6 +73,21 @@ http
   .listen(4001);
 
 // ── :4002 Google ──────────────────────────────────────────────────────────
+// What each account's calendar list looks like. The second account has a
+// birthdays calendar that, like some special Google calendars, cannot report
+// busy times.
+const googleCalendars = (account) =>
+  account === 'avi@gmail.test'
+    ? [
+        { id: 'avi@gmail.test', summary: 'avi@gmail.test', accessRole: 'owner', primary: true, backgroundColor: '#4285f4' },
+        { id: 'family@group.calendar.google.com', summary: 'Family', accessRole: 'writer', backgroundColor: '#0b8043' },
+        { id: 'holidays@group.v.calendar.google.com', summary: 'Holidays in United States', accessRole: 'reader' },
+      ]
+    : [
+        { id: account, summary: account, accessRole: 'owner', primary: true, backgroundColor: '#8e24aa' },
+        { id: `birthdays-${account}`, summary: 'Birthdays', accessRole: 'reader', unreadable: true },
+      ];
+
 http
   .createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
@@ -76,7 +96,10 @@ http
     if (url.pathname === '/auth') {
       const back = new URL(url.searchParams.get('redirect_uri'));
       g.authQuery = Object.fromEntries(url.searchParams);
-      back.searchParams.set('code', 'g-code');
+      g.authQueries.push(g.authQuery);
+      // A reconnect names the account; otherwise the person picks one.
+      const account = url.searchParams.get('login_hint') || g.nextAccount;
+      back.searchParams.set('code', `g-code:${account}`);
       back.searchParams.set('state', url.searchParams.get('state'));
       res.writeHead(302, { Location: back.href });
       return res.end();
@@ -85,39 +108,50 @@ http
       const form = Object.fromEntries(new URLSearchParams(raw));
       g.tokenCalls.push(form);
       if (form.grant_type === 'authorization_code') {
-        const idToken = ['x', Buffer.from(JSON.stringify({ email: 'avi@gmail.test' })).toString('base64url'), 'y'].join('.');
+        const account = form.code.replace(/^g-code:/, '');
+        g.revoked = g.revoked.filter((a) => a !== account);
+        const idToken = ['x', Buffer.from(JSON.stringify({ email: account })).toString('base64url'), 'y'].join('.');
+        const token = `g-access-${++g.access}`;
+        g.latest[account] = token;
         // Expires almost at once, so the very next call has to refresh.
-        return send(res, 200, { access_token: `g-access-${++g.access}`, expires_in: 1, refresh_token: 'g-refresh', id_token: idToken });
+        return send(res, 200, { access_token: token, expires_in: 1, refresh_token: `g-refresh:${account}`, id_token: idToken });
       }
-      if (form.refresh_token !== 'g-refresh') return send(res, 400, { error: 'invalid_grant' });
-      return send(res, 200, { access_token: `g-access-${++g.access}`, expires_in: 3600 });
+      const account = (form.refresh_token || '').replace(/^g-refresh:/, '');
+      if (!form.refresh_token?.startsWith('g-refresh:') || g.revoked.includes(account)) {
+        return send(res, 400, { error: 'invalid_grant', error_description: 'Token has been expired or revoked.' });
+      }
+      const token = `g-access-${++g.access}`;
+      g.latest[account] = token;
+      return send(res, 200, { access_token: token, expires_in: 3600 });
     }
     const auth = req.headers.authorization || '';
-    g.apiCalls.push({ method: req.method, path: url.pathname + url.search, auth });
-    if (auth !== `Bearer g-access-${g.access}`) return send(res, 401, { error: 'stale token ' + auth });
+    const account = Object.keys(g.latest).find((a) => auth === `Bearer ${g.latest[a]}`);
+    g.apiCalls.push({ method: req.method, path: url.pathname + url.search, auth, account });
+    if (!account || g.revoked.includes(account)) return send(res, 401, { error: 'stale token ' + auth });
+    const calendars = googleCalendars(account);
     if (url.pathname === '/calendar/v3/users/me/calendarList') {
-      return send(res, 200, {
-        items: [
-          { id: 'avi@gmail.test', summary: 'avi@gmail.test', accessRole: 'owner', primary: true, backgroundColor: '#4285f4' },
-          { id: 'family@group.calendar.google.com', summary: 'Family', accessRole: 'writer', backgroundColor: '#0b8043' },
-          { id: 'holidays@group.v.calendar.google.com', summary: 'Holidays in United States', accessRole: 'reader' },
-        ],
-      });
+      return send(res, 200, { items: calendars.map(({ unreadable, ...item }) => item) });
     }
     if (url.pathname === '/calendar/v3/freeBusy') {
       const q = JSON.parse(raw);
       g.lastFreeBusy = q;
+      g.freeBusyCalls = [...(g.freeBusyCalls || []), { account, items: q.items.map((i) => i.id) }];
       if (g.failFreeBusy) return send(res, 500, { error: 'backend error' });
-      const calendars = {};
+      const result = {};
       for (const { id } of q.items) {
-        calendars[id] = {
+        const calendar = calendars.find((c) => c.id === id);
+        if (!calendar || calendar.unreadable) {
+          result[id] = { errors: [{ domain: 'global', reason: 'notFound' }] };
+          continue;
+        }
+        result[id] = {
           busy: g.events
             .filter((e) => e.calendarId === id && e.transparency !== 'transparent')
             .filter((e) => Date.parse(e.end) > Date.parse(q.timeMin) && Date.parse(e.start) < Date.parse(q.timeMax))
             .map((e) => ({ start: e.start, end: e.end })),
         };
       }
-      return send(res, 200, { calendars });
+      return send(res, 200, { calendars: result });
     }
     let m = /^\/calendar\/v3\/calendars\/([^/]+)\/events$/.exec(url.pathname);
     if (m && req.method === 'POST') {
@@ -125,6 +159,7 @@ http
       const event = {
         id: `gev-${++g.seq}`,
         calendarId: decodeURIComponent(m[1]),
+        account,
         start: input.start.dateTime,
         end: input.end.dateTime,
         input,

@@ -26,7 +26,8 @@ const { chromium, BASE, D, compact, icsDate, icsLocal, check, finish, daySlots, 
   });
 
   await page.goto(`${BASE}/admin/calendars`);
-  await page.click('summary:has-text("Add a link")');
+  await page.click('text=Add by .ics link');
+  await page.waitForSelector('#ics-url');
   await page.fill('#ics-url', 'not a url');
   await page.click('button:has-text("Add calendar")');
   await page.waitForSelector('text=does not look like a web address');
@@ -50,8 +51,8 @@ const { chromium, BASE, D, compact, icsDate, icsLocal, check, finish, daySlots, 
   const down = await daySlots(D.thu);
   check('broken feed: times are withheld (503) instead of guessed', down.status === 503 && down.error === 'calendar_unavailable', JSON.stringify(down));
   await page.goto(`${BASE}/admin/calendars`);
-  await page.waitForSelector('text=This calendar is not syncing');
-  check('the Calendars page reports it', true);
+  await page.waitForSelector('text=Not syncing');
+  check('the Calendars page reports it', (await page.locator('text=your booking pages are paused').count()) === 1);
   await page.goto(`${BASE}/admin/event-types`);
   check('the event types page warns too', (await page.locator('text=stopped syncing').count()) > 0);
   const pub = await visitor(browser);

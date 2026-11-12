@@ -71,28 +71,76 @@ any Node host and any Postgres work the same way.
    ```
 4. **Redeploy** (Deployments → the ⋯ menu on the latest one → Redeploy). Settings only take effect on a new deployment, and the database tables are created during the build.
 5. **Open the site and create your account**, pasting the `SETUP_TOKEN` value into the first field. The first person to submit that form with the right token becomes the owner, and after that setup is closed for good. Without the token nobody can claim the site, so there is no rush, but do not share it. Once your account exists you can delete the `SETUP_TOKEN` setting.
-6. **Connect your calendars** under Calendars (each option shows its own steps), then check your hours under Availability.
+6. **Connect your calendars** under Calendars (see below), then check your hours under Availability.
 7. Optional: turn on email and the webhook under Settings. If you add a custom domain, set `APP_URL` to it (for example `https://meet.example.com`) so links in emails and calendar entries use that address.
 
 If something is still missing or the database cannot be reached, `/admin/setup` says which, and what to do about it.
 
-### Connecting calendars
+### Connecting your calendars
 
-- **By link (.ics)** needs nothing but the link, so it is the quickest way to
-  block busy times from any calendar. It cannot receive bookings.
-- **iCloud / CalDAV** needs an app-specific password (the Calendars page says where to create one).
-- **Google and Microsoft** need a one-time "app registration" on their side,
-  about five minutes each. The Calendars page lists the exact steps and shows
-  the redirect address to paste. Two things to know:
-  - Google: if your account is not Google Workspace, publish the app
-    ("In production") or Google will sign you out every seven days.
-  - Microsoft: a work account may need an administrator to approve calendar access.
+Open **Calendars** in the admin and press a button:
+
+- **Connect Google**: pick your Google account, allow access, done. Press it
+  again to add a second or third Gmail / Workspace account; each one is checked
+  for conflicts.
+- **Connect Outlook / Microsoft 365**: the same, for Outlook.com, Hotmail and
+  work accounts.
+- **Connect iCloud**: type your Apple ID email and an
+  [app-specific password](https://appleid.apple.com/account/manage) (Sign-In
+  and Security → App-Specific Passwords). Calendi finds your calendars itself.
+- **Add by .ics link**: any calendar's private subscription link. Read-only:
+  it blocks busy times but cannot receive bookings.
+
+Every calendar starts with **Check for conflicts** on; switch off any you do
+not want (a holidays calendar, say). Turn on **Add new bookings here** on the
+calendar new bookings should go to (the main calendar of the first account,
+until you choose), and under **Where new bookings go** a meeting type can use
+a different one. If an account stops working (a sign-in expired, a password
+changed), it is marked **Not syncing** and booking pauses until you press
+**Reconnect**.
+
+**Google and Microsoft need a one-time app registration first** (about five
+minutes each, done once, never again per account). Until it is done, their
+button opens a setup card with the exact redirect URL to copy, five steps with
+direct links, and the scopes to add. In short:
+
+- Google: create a project in Google Cloud, enable the Google Calendar API,
+  set up the sign-in screen with the scopes `openid`, `email`,
+  `calendar.calendarlist.readonly`, `calendar.freebusy` and `calendar.events`,
+  create a "Web application" OAuth client with the redirect URL, then add
+  `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in Vercel and redeploy.
+  **Set the app to "In production"** (Google Auth Platform → Audience →
+  Publish app). Left "In testing", Google expires the sign-in every 7 days and
+  the calendar shows as Not syncing. Calendi only asks for those three
+  calendar scopes, so Google may show an "unverified app" notice once; as the
+  app's owner you can continue past it.
+- Microsoft: register an app in Microsoft Entra (any organisation and personal
+  accounts, "Web" redirect URL), add the delegated Graph permissions
+  `offline_access`, `openid`, `email`, `profile`, `User.Read` and
+  `Calendars.ReadWrite`, create a client secret, then add
+  `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET` in Vercel and redeploy.
+  A work account may need an administrator to approve calendar access.
+
+The app's ID and secret live only in those environment variables; there is
+nowhere to type them into the admin. (Accounts connected by earlier versions,
+which saved them in the admin, keep working until you set the variables.)
+
+### Email addresses
+
+Under **Settings → Email addresses** you can add more addresses to your
+account. Each one gets a six-digit code by email; once confirmed it signs in
+with your usual password. Without email set up (Settings → Email
+notifications), a new address stays unverified and cannot be used to sign in.
+One confirmed address is the **notifications** address, where booking alerts
+go; a meeting type can send its alerts to another one (edit the meeting type
+→ Notifications). Calendar accounts are separate: connecting a Google account
+does not add its address to your sign-in.
 
 ### Settings reference
 
 The first two are always required, and `SETUP_TOKEN` until your account
-exists. The rest can be entered in the admin instead (where they are stored
-encrypted); a value set here wins.
+exists. The Google and Microsoft settings can only be set here. Email can be
+set here or in the admin (where it is stored encrypted); a value set here wins.
 
 | Variable | Purpose |
 |---|---|
@@ -100,8 +148,8 @@ encrypted); a value set here wins.
 | `APP_SECRET` | At least 32 characters. Signs sessions and encrypts stored credentials. |
 | `SETUP_TOKEN` | At least 24 characters. Must be typed on the setup form to create the owner account. Not needed afterwards. |
 | `APP_URL` | Public address, if it should not be taken from the request (custom domains). |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google app registration. |
-| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID` | Microsoft app registration (tenant only for single-organisation apps). |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google app registration (needed for Connect Google). |
+| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID` | Microsoft app registration (needed for Connect Outlook / Microsoft 365; tenant only for single-organisation apps). |
 | `RESEND_API_KEY` or `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, plus `EMAIL_FROM` | Outgoing email. |
 | `MIGRATE_ON_PREVIEW` | Set to `1` only if Vercel preview deployments have a database of their own. By default previews never change the database (see below). |
 | `CALENDAR_CACHE_SECONDS` | How long calendar lookups are remembered while people browse (default 60, 0 to disable). Booking always re-checks. |
@@ -128,7 +176,8 @@ encrypted); a value set here wins.
   that calendar sends the invitation and any updates. Otherwise Calendi's own
   email does, so turn email on under Settings if you use iCloud or links only.
 - **Lost the password?** There is no reset email. Replace the password hash
-  in the `owner` table, or ask a developer to. Sign-in also pauses for 15
+  in the `owner` table, or ask a developer to. Any of your confirmed email
+  addresses works with the same password. Sign-in also pauses for 15
   minutes after 8 wrong passwords in a row.
 - **Not included:** teams and round-robin, group events, payments, SMS,
   reminder workflows, and Zoom's own integration (use a personal Zoom room link

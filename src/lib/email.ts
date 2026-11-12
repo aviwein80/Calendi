@@ -210,6 +210,8 @@ export async function sendBookingEmails(
   booking: Booking,
   owner: Owner,
   baseUrl: string,
+  /** The meeting type's own alert address, if it has one ('' or undefined: the notifications address). */
+  alertTo?: string,
 ): Promise<void> {
   const config = emailConfig(owner);
   if (!config) return;
@@ -296,7 +298,7 @@ export async function sendBookingEmails(
   });
   jobs.push(
     sendEmail(
-      { to: [owner.email], subject: ownerCopy.subject, ...ownerBody, replyTo: booking.invitee_email },
+      { to: [alertTo || owner.email], subject: ownerCopy.subject, ...ownerBody, replyTo: booking.invitee_email },
       owner,
       config,
     ),
@@ -316,6 +318,25 @@ export async function sendTestEmail(owner: Owner, config: EmailConfig): Promise<
     rows: [['Sent to', owner.email]],
   });
   await sendEmail({ to: [owner.email], subject: 'Calendi test email', ...body }, owner, config);
+}
+
+/** The one-time code that proves the owner can read mail at a newly added address. */
+export async function sendVerificationCode(
+  owner: Owner,
+  config: EmailConfig,
+  to: string,
+  code: string,
+  baseUrl: string,
+): Promise<void> {
+  const body = layout({
+    heading: `Your code: ${code}`,
+    intro: `Enter this code in Calendi (Settings → Email addresses) to confirm ${to}. It works for 30 minutes.`,
+    color: owner.brand_color,
+    rows: [['Code', code]],
+    actions: [{ label: 'Open Settings', url: `${baseUrl}/admin/settings#emails` }],
+    footer: 'Did not ask for this? You can ignore this email; the address will not be added.',
+  });
+  await sendEmail({ to: [to], subject: `${code} is your Calendi confirmation code`, ...body }, owner, config);
 }
 
 // Tell the owner (at most once a day per account) when a calendar stops syncing.

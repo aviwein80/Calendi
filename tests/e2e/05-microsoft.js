@@ -10,20 +10,18 @@ const { chromium, BASE, D, utc, check, finish, daySlots, mock, sql, reset, admin
   console.log('Outlook / Microsoft 365');
 
   await page.goto(`${BASE}/admin/calendars`);
-  await page.fill('#microsoft-id', 'ms-client-id');
-  await page.fill('#microsoft-secret', 'ms-secret');
-  await page.locator('form:has(#microsoft-id) button[type=submit]').click();
-  await page.waitForSelector('a:has-text("Connect Microsoft")');
-  await page.click('a:has-text("Connect Microsoft")');
-  await page.waitForURL('**/admin/calendars?connected=1');
-  await page.waitForSelector('text=avi@outlook.test');
+  await page.click('#connect >> text=Connect Outlook / Microsoft 365');
+  await page.waitForURL('**/admin/calendars?connected=*');
+  await page.waitForSelector('[data-account="avi@outlook.test"]');
   await shot(page, 'calendars-microsoft', true);
   let state = await mock('/state');
   const consent = state.microsoft.authQuery;
+  check('one click goes straight to Microsoft, with the app settings from the environment', consent.client_id === 'ms-client-id' && state.microsoft.tokenCalls[0].client_secret === 'ms-secret');
+  check('Microsoft shows its account picker', consent.prompt === 'select_account');
   check('consent asks for offline_access and Calendars.ReadWrite', consent.scope.includes('offline_access') && consent.scope.includes('Calendars.ReadWrite'));
   check('redirect address is this app', consent.redirect_uri === `${BASE}/api/oauth/microsoft/callback`);
   check('the default calendar is chosen for new bookings', sql('select name from calendars where is_booking_target') === 'Calendar');
-  check('the read-only Birthdays calendar starts unchecked', sql("select check_conflicts::text from calendars where name='Birthdays'") === 'false');
+  check('the read-only Birthdays calendar is checked by default too, and cannot take bookings', sql("select check_conflicts::text || can_write::text from calendars where name='Birthdays'") === 'truefalse');
 
   const add = (data) => mock('/microsoft/event', { calendarId: 'cal-default', ...data });
   await add({ start: utc(D.tue.at('10:00')), end: utc(D.tue.at('11:00')) });
