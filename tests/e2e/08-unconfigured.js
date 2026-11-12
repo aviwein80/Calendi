@@ -29,6 +29,7 @@ const FIRST_PORT = Number(process.env.E2E_PORT || 3210) + 10;
     check('it names the missing secret', (await page.locator('text=APP_SECRET is not set').count()) === 1);
     check('and the missing setup token, so all three can be added in one go', (await page.locator('text=SETUP_TOKEN is not set').count()) === 1);
     check('it says to redeploy afterwards', (await page.locator('text=Then redeploy.').count()) === 1);
+    check('the checklist still links to the privacy policy and terms', (await page.locator('footer a[href="/privacy"]').count()) === 1 && (await page.locator('footer a[href="/terms"]').count()) === 1);
     check('the account form is not offered yet', (await page.locator('#password').count()) === 0);
     await page.waitForTimeout(300); // let the fade-in finish so the screenshot is legible
     await shot(page, 'setup-checklist');

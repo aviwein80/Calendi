@@ -45,6 +45,7 @@ const { chromium, BASE, STATE, OWNER, SETUP_TOKEN, APP_SECRET, DATABASE_URL, che
   await page.goto(`${BASE}/`);
   await page.waitForURL('**/admin/setup');
   await page.waitForSelector('#name');
+  check('the account form has the privacy and terms links under it', (await page.locator('footer a[href="/privacy"]').count()) === 1 && (await page.locator('footer a[href="/terms"]').count()) === 1);
   check('an empty install sends visitors to setup', true);
   check('time zone is pre-selected from the browser', (await page.inputValue('#timezone')) === 'America/New_York');
 

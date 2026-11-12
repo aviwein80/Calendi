@@ -19,6 +19,8 @@ export const RESERVED_SLUGS = new Set([
   'public',
   'login',
   'setup',
+  'privacy',
+  'terms',
 ]);
 
 export const EVENT_COLORS = [
