@@ -144,15 +144,22 @@ function calendarEvent(booking: Booking, owner: Owner, baseUrl: string, conferen
 
 async function conferenceFor(eventType: EventType | null): Promise<EventInput['conference']> {
   if (!eventType) return null;
-  const provider = await bookingTargetProvider();
+  const provider = await bookingTargetProvider(eventType);
   if (eventType.location_type === 'google_meet' && provider === 'google') return 'google_meet';
   if (eventType.location_type === 'teams' && provider === 'microsoft') return 'teams';
   return null;
 }
 
-async function notify(event: BookingEvent, booking: Booking, owner: Owner, baseUrl: string): Promise<void> {
+async function notify(
+  event: BookingEvent,
+  booking: Booking,
+  owner: Owner,
+  baseUrl: string,
+  eventType?: EventType | null,
+): Promise<void> {
+  const type = eventType !== undefined ? eventType : booking.event_type_id ? await getEventType(booking.event_type_id) : null;
   await Promise.allSettled([
-    sendBookingEmails(event, booking, owner, baseUrl),
+    sendBookingEmails(event, booking, owner, baseUrl, type?.notify_email),
     sendBookingWebhook(`booking.${event}`, booking, owner, baseUrl),
   ]);
 }
@@ -236,7 +243,7 @@ export async function createBooking(request: BookingRequest, baseUrl: string): P
     booking = (await updateBooking(booking.id, { meeting_url: eventType.location_value })) ?? booking;
   }
   booking = await saveToCalendar(booking, owner, eventType, baseUrl);
-  await notify('created', booking, owner, baseUrl);
+  await notify('created', booking, owner, baseUrl, eventType);
   return booking;
 }
 
@@ -249,7 +256,7 @@ async function saveToCalendar(
 ): Promise<Booking> {
   try {
     const conference = await conferenceFor(eventType);
-    const saved = await createCalendarEvent(calendarEvent(booking, owner, baseUrl, conference));
+    const saved = await createCalendarEvent(calendarEvent(booking, owner, baseUrl, conference), eventType);
     if (!saved) return booking;
     const meetingUrl = saved.created.meetingUrl || booking.meeting_url;
     return (
@@ -378,7 +385,7 @@ export async function rescheduleBooking(
     // It never made it onto the calendar the first time; try again now.
     updated = withKnownToken(await saveToCalendar(updated, owner, eventType, baseUrl), updated);
   }
-  await notify('rescheduled', updated, owner, baseUrl);
+  await notify('rescheduled', updated, owner, baseUrl, eventType);
   return updated;
 }
 

@@ -81,11 +81,14 @@ async function reset() {
     delete from calendar_accounts;
     delete from event_types where slug <> '30min';
     update event_types set location_type = 'none', location_value = '', questions = '[]', allow_guests = false,
-      buffer_before_minutes = 0, buffer_after_minutes = 0, daily_limit = null, is_active = true, is_hidden = false;
+      buffer_before_minutes = 0, buffer_after_minutes = 0, daily_limit = null, is_active = true, is_hidden = false,
+      calendar_id = null, notify_email = '';
+    delete from owner_emails where email <> '${OWNER.email}';
+    insert into owner_emails (email, verified_at) values ('${OWNER.email}', now()) on conflict do nothing;
     delete from schedules where not is_default;
     update schedules set overrides = '{}', weekly = '${WEEK}';
     update owner set integrations = '', webhook_url = '', welcome_message = '', brand_color = '#4f46e5',
-      failed_logins = 0, locked_until = null;
+      failed_logins = 0, locked_until = null, email = '${OWNER.email}';
     delete from rate_limits;
   `);
   await mock('/reset', {});
@@ -147,7 +150,10 @@ async function book(page, { slug = '30min', day, time, name = 'Jane Invitee', em
  */
 async function startApp(port, settings) {
   const env = { ...process.env, ...settings };
-  for (const name of ['DATABASE_URL', 'POSTGRES_URL', 'POSTGRES_URL_NON_POOLING', 'APP_SECRET', 'APP_URL', 'SETUP_TOKEN']) {
+  for (const name of [
+    'DATABASE_URL', 'POSTGRES_URL', 'POSTGRES_URL_NON_POOLING', 'APP_SECRET', 'APP_URL', 'SETUP_TOKEN',
+    'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET', 'MICROSOFT_TENANT_ID',
+  ]) {
     // Blank rather than removed: a removed variable would be filled back in
     // from a developer's .env.local, a blank one is left alone.
     if (!(name in settings)) env[name] = '';

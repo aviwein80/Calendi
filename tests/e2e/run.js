@@ -110,15 +110,16 @@ async function portFree(port) {
     const dir = path.join(OUT, 'radicale');
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'users'), 'avi:secret\n');
+    // The account stands in for an iCloud one, so its user name is an Apple ID email.
+    fs.writeFileSync(path.join(dir, 'users'), 'avi@icloud.test:secret\n');
     fs.writeFileSync(
       path.join(dir, 'config'),
       `[server]\nhosts = 127.0.0.1:5232\n[auth]\ntype = htpasswd\nhtpasswd_filename = ${dir}/users\nhtpasswd_encryption = plain\n[storage]\nfilesystem_folder = ${dir}/collections\n`,
     );
     start('radicale', python, ['-m', 'radicale', '--config', path.join(dir, 'config')]);
-    const auth = { Authorization: 'Basic ' + Buffer.from('avi:secret').toString('base64') };
+    const auth = { Authorization: 'Basic ' + Buffer.from('avi@icloud.test:secret').toString('base64') };
     await waitFor('http://127.0.0.1:5232/', 'Radicale', { headers: auth });
-    const made = await fetch('http://127.0.0.1:5232/avi/work/', {
+    const made = await fetch('http://127.0.0.1:5232/avi@icloud.test/work/', {
       method: 'MKCALENDAR',
       headers: { ...auth, 'Content-Type': 'application/xml' },
       body: '<?xml version="1.0"?><C:mkcalendar xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:set><D:prop><D:displayname>Work</D:displayname><C:supported-calendar-component-set><C:comp name="VEVENT"/></C:supported-calendar-component-set></D:prop></D:set></C:mkcalendar>',
@@ -142,11 +143,15 @@ async function portFree(port) {
     MICROSOFT_LOGIN_BASE: 'http://localhost:4003',
     MICROSOFT_GRAPH_BASE: 'http://localhost:4003/v1.0',
     RESEND_API_URL: 'http://localhost:4004/emails',
-    // Never let real credentials from the shell leak into a test run.
-    GOOGLE_CLIENT_ID: '',
-    GOOGLE_CLIENT_SECRET: '',
-    MICROSOFT_CLIENT_ID: '',
-    MICROSOFT_CLIENT_SECRET: '',
+    // "Connect iCloud" talks to the local CalDAV server instead of Apple.
+    ICLOUD_CALDAV_URL: 'http://127.0.0.1:5232/',
+    // The Google and Microsoft app settings the owner sets once. Test values,
+    // so real credentials from the shell never leak into a test run.
+    GOOGLE_CLIENT_ID: 'test-client-id.apps.googleusercontent.com',
+    GOOGLE_CLIENT_SECRET: 'test-secret',
+    MICROSOFT_CLIENT_ID: 'ms-client-id',
+    MICROSOFT_CLIENT_SECRET: 'ms-secret',
+    MICROSOFT_TENANT_ID: '',
     RESEND_API_KEY: '',
     SMTP_HOST: '',
     EMAIL_FROM: '',

@@ -37,12 +37,15 @@ export function EventTypeForm({
   schedules,
   baseUrl,
   bookingTarget,
+  alertAddresses,
 }: {
   eventType: EventType | null;
   schedules: { id: string; name: string; is_default: boolean }[];
   baseUrl: string;
-  /** Which calendar provider new bookings are saved to, if any. */
+  /** Which calendar provider this type's new bookings are saved to, if any. */
   bookingTarget: CalendarProviderId | null;
+  /** The owner's confirmed addresses, and which one is the notifications address. */
+  alertAddresses: { emails: string[]; current: string };
 }) {
   const [draft, setDraft] = useState<Draft>(
     eventType ?? {
@@ -64,6 +67,8 @@ export function EventTypeForm({
       allow_guests: false,
       is_active: true,
       is_hidden: false,
+      calendar_id: null,
+      notify_email: '',
     },
   );
   const [slugEdited, setSlugEdited] = useState(Boolean(eventType));
@@ -460,6 +465,33 @@ export function EventTypeForm({
             Let invitees add guests
           </label>
         </div>
+      </Section>
+
+      <Section
+        title="Notifications"
+        description="Where the alert goes when someone books, moves or cancels this meeting (if email is set up under Settings)."
+      >
+        <Field
+          label="Send booking alerts to"
+          htmlFor="notify_email"
+          hint="Add more addresses under Settings → Email addresses. Only confirmed ones are listed."
+        >
+          <Select
+            id="notify_email"
+            className="w-full sm:w-96"
+            value={alertAddresses.emails.includes(draft.notify_email) ? draft.notify_email : ''}
+            onChange={(e) => set('notify_email', e.target.value)}
+          >
+            <option value="">Your notifications address ({alertAddresses.current})</option>
+            {alertAddresses.emails
+              .filter((email) => email !== alertAddresses.current)
+              .map((email) => (
+                <option key={email} value={email}>
+                  {email}
+                </option>
+              ))}
+          </Select>
+        </Field>
       </Section>
 
       <Section title="Visibility">

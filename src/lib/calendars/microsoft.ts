@@ -30,16 +30,23 @@ export const MICROSOFT_SCOPES = [
 
 const tenantOf = (client: OAuthClient) => client.tenant?.trim() || 'common';
 
-export function microsoftAuthorizeUrl(client: OAuthClient, redirectUri: string, state: string): string {
+export function microsoftAuthorizeUrl(
+  client: OAuthClient,
+  redirectUri: string,
+  state: string,
+  loginHint?: string,
+): string {
   const params = new URLSearchParams({
     client_id: client.clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
     response_mode: 'query',
     scope: MICROSOFT_SCOPES.join(' '),
+    // Always show the account picker, so the same button can add another account.
     prompt: 'select_account',
     state,
   });
+  if (loginHint) params.set('login_hint', loginHint);
   return `${login(tenantOf(client))}/authorize?${params}`;
 }
 

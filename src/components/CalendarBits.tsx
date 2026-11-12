@@ -1,17 +1,18 @@
 'use client';
 
-import { RefreshCw, Unplug } from 'lucide-react';
-import { useState } from 'react';
+import { RefreshCw, Trash2 } from 'lucide-react';
+import { useState, useTransition } from 'react';
 import {
   connectCalDavAction,
+  connectICloudAction,
   connectIcsAction,
   disconnectAccountAction,
   refreshAccountAction,
-  saveOAuthAppAction,
   setBookingTargetAction,
   setCalendarConflictsAction,
+  setEventTypeCalendarAction,
 } from '@/app/actions/admin';
-import { ActionButton, ActionForm, CopyButton, FormMessage, SubmitButton, Toggle } from './client';
+import { ActionButton, ActionForm, FormMessage, SubmitButton, Toggle } from './client';
 import { Field, Input, Select } from './ui';
 
 // Interactive pieces of the Calendars page.
@@ -26,17 +27,20 @@ export function ConflictToggle({ calendarId, checked, name }: { calendarId: stri
   );
 }
 
-export function TargetButton({ calendarId, label }: { calendarId: string | null; label: string }) {
+/** "Add new bookings here": the default calendar. Only one can be on at a time. */
+export function TargetToggle({ calendarId, checked, name }: { calendarId: string; checked: boolean; name: string }) {
   return (
-    <ActionButton variant="secondary" size="sm" action={() => setBookingTargetAction(calendarId)}>
-      {label}
-    </ActionButton>
+    <Toggle
+      checked={checked}
+      label={`Add new bookings to ${name}`}
+      onChange={(next) => setBookingTargetAction(next ? calendarId : null)}
+    />
   );
 }
 
 export function AccountActions({ accountId, label }: { accountId: string; label: string }) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <>
       <ActionButton variant="ghost" size="sm" action={() => refreshAccountAction(accountId)}>
         <RefreshCw className="size-4" aria-hidden />
         Refresh
@@ -44,25 +48,100 @@ export function AccountActions({ accountId, label }: { accountId: string; label:
       <ActionButton
         variant="ghost"
         size="sm"
-        confirm={`Disconnect ${label}? Its events will no longer block your booking times.`}
+        confirm={`Remove ${label}? Its events will no longer block your booking times.`}
         action={() => disconnectAccountAction(accountId)}
       >
-        <Unplug className="size-4" aria-hidden />
-        Disconnect
+        <Trash2 className="size-4" aria-hidden />
+        Remove
       </ActionButton>
-    </div>
+    </>
   );
 }
 
+/** Which calendar one meeting type's new bookings go to. */
+export function EventTypeCalendarSelect({
+  eventTypeId,
+  name,
+  value,
+  defaultLabel,
+  options,
+}: {
+  eventTypeId: string;
+  name: string;
+  value: string | null;
+  defaultLabel: string;
+  options: { id: string; label: string }[];
+}) {
+  const [selected, setSelected] = useState(value ?? '');
+  const [pending, startTransition] = useTransition();
+  return (
+    <Select
+      aria-label={`Calendar for ${name}`}
+      className="w-full sm:w-96"
+      value={selected}
+      disabled={pending}
+      onChange={(event) => {
+        const next = event.target.value;
+        setSelected(next);
+        startTransition(async () => {
+          await setEventTypeCalendarAction(eventTypeId, next || null);
+        });
+      }}
+    >
+      <option value="">{defaultLabel}</option>
+      {options.map((option) => (
+        <option key={option.id} value={option.id}>
+          {option.label}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
+export function ICloudForm({ email = '' }: { email?: string }) {
+  return (
+    <ActionForm action={connectICloudAction} className="space-y-3">
+      <Field label="Apple ID email" htmlFor="icloud-email">
+        <Input
+          id="icloud-email"
+          name="email"
+          type="email"
+          required
+          autoComplete="off"
+          defaultValue={email}
+          placeholder="you@icloud.com"
+        />
+      </Field>
+      <Field
+        label="App-specific password"
+        htmlFor="icloud-password"
+        hint={
+          <>
+            Not your Apple ID password. Sign in at{' '}
+            <a href="https://appleid.apple.com/account/manage" target="_blank" rel="noreferrer" className="font-medium text-brand underline">
+              appleid.apple.com
+            </a>{' '}
+            → Sign-In and Security → App-Specific Passwords → +, name it “Calendi”, and paste it here.
+          </>
+        }
+      >
+        <Input id="icloud-password" name="password" type="password" required autoComplete="off" placeholder="xxxx-xxxx-xxxx-xxxx" />
+      </Field>
+      <FormMessage />
+      <SubmitButton>Connect iCloud</SubmitButton>
+    </ActionForm>
+  );
+}
+
+/** Fastmail, Nextcloud and other CalDAV servers, where the server address is needed. */
 export function CalDavForm() {
-  const [preset, setPreset] = useState('icloud');
+  const [preset, setPreset] = useState('fastmail');
   return (
     <ActionForm action={connectCalDavAction} className="space-y-3">
       <Field label="Service" htmlFor="caldav-preset">
         <Select id="caldav-preset" name="preset" value={preset} onChange={(e) => setPreset(e.target.value)}>
-          <option value="icloud">Apple iCloud</option>
           <option value="fastmail">Fastmail</option>
-          <option value="other">Other CalDAV server</option>
+          <option value="other">Other CalDAV server (Nextcloud, …)</option>
         </Select>
       </Field>
       {preset === 'other' && (
@@ -70,19 +149,13 @@ export function CalDavForm() {
           <Input id="caldav-url" name="serverUrl" type="url" required placeholder="https://cloud.example.com/remote.php/dav" />
         </Field>
       )}
-      <Field label={preset === 'icloud' ? 'Apple ID email' : 'Username'} htmlFor="caldav-user">
+      <Field label="Username" htmlFor="caldav-user">
         <Input id="caldav-user" name="username" required autoComplete="off" />
       </Field>
       <Field
-        label={preset === 'other' ? 'Password' : 'App-specific password'}
+        label={preset === 'other' ? 'Password' : 'App password'}
         htmlFor="caldav-pass"
-        hint={
-          preset === 'icloud'
-            ? 'Not your Apple ID password. Create one at account.apple.com → Sign-In and Security → App-Specific Passwords.'
-            : preset === 'fastmail'
-              ? 'Create one in Fastmail under Settings → Privacy & Security → App passwords (CalDAV access).'
-              : undefined
-        }
+        hint={preset === 'fastmail' ? 'Create one in Fastmail under Settings → Privacy & Security → App passwords (CalDAV access).' : undefined}
       >
         <Input id="caldav-pass" name="password" type="password" required autoComplete="off" />
       </Field>
@@ -103,46 +176,6 @@ export function IcsForm() {
       </Field>
       <FormMessage />
       <SubmitButton variant="secondary">Add calendar</SubmitButton>
-    </ActionForm>
-  );
-}
-
-export function OAuthAppForm({
-  provider,
-  redirectUri,
-  hasSaved,
-}: {
-  provider: 'google' | 'microsoft';
-  redirectUri: string;
-  hasSaved: boolean;
-}) {
-  return (
-    <ActionForm action={saveOAuthAppAction} className="space-y-3">
-      <input type="hidden" name="provider" value={provider} />
-      <div>
-        <p className="mb-1.5 text-sm font-medium text-zinc-800">Redirect address to paste into {provider === 'google' ? 'Google' : 'Microsoft'}</p>
-        <div className="flex flex-wrap items-center gap-2">
-          <code className="min-w-0 flex-1 break-all rounded-lg bg-zinc-100 px-3 py-2 text-xs">{redirectUri}</code>
-          <CopyButton text={redirectUri} label="Copy" />
-        </div>
-      </div>
-      <Field label={provider === 'google' ? 'Client ID' : 'Application (client) ID'} htmlFor={`${provider}-id`}>
-        <Input id={`${provider}-id`} name="clientId" required autoComplete="off" placeholder={hasSaved ? 'Saved. Enter again to replace.' : ''} />
-      </Field>
-      <Field label={provider === 'google' ? 'Client secret' : 'Client secret value'} htmlFor={`${provider}-secret`}>
-        <Input id={`${provider}-secret`} name="clientSecret" type="password" required autoComplete="off" />
-      </Field>
-      {provider === 'microsoft' && (
-        <Field
-          label="Tenant ID"
-          htmlFor="microsoft-tenant"
-          hint="Leave empty unless the app registration is limited to a single organisation."
-        >
-          <Input id="microsoft-tenant" name="tenant" autoComplete="off" />
-        </Field>
-      )}
-      <FormMessage />
-      <SubmitButton variant="secondary">Save</SubmitButton>
     </ActionForm>
   );
 }

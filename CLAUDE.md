@@ -32,6 +32,7 @@ src/lib/               Everything that is not a screen
   crypto.ts            AES-GCM encryption, HMAC signing, scrypt password hashing
   session.ts           Owner session cookie; requireOwner / assertOwner
   account.ts           Creating the owner (needs SETUP_TOKEN, once only) and sign-in
+  ownerEmails.ts       The owner's extra email addresses: add, confirm by code, notifications address
   rateLimit.ts         Per-address limits counted in Postgres; clientAddress()
   manage.ts            findBookingByLink(): manage-link lookup that counts wrong guesses
   http.ts bookingApi.ts  Helpers for the JSON endpoints (429s, origin check, replies)
@@ -43,6 +44,7 @@ src/lib/               Everything that is not a screen
     index.ts           getSlots(): schedule + calendars + bookings -> start times
   calendars/
     types.ts           CalendarProvider interface, ProviderError, fetch helpers
+    setup.ts           Google / Microsoft app settings from env vars, the owner's setup guide
     google.ts microsoft.ts caldav.ts ics.ts   One provider each
     icsParse.ts        iCalendar -> busy intervals (recurrence, zones, all-day)
     icsBuild.ts        Booking -> iCalendar text
@@ -86,6 +88,13 @@ tests/                 *.test.ts unit tests; e2e/ browser specs + mock services
 - `'use server'` files may only export async functions (types are fine).
 - Read `node_modules/next/dist/docs/` before using a Next API you have not used
   in this repo yet.
+- **Install-state pages** (`/`, `/admin/login`, `/admin/setup`: anything that
+  calls `installStatus()`) are the exception to the Suspense pattern. They set
+  `export const instant = false` and `await connection()` at the top of the
+  page itself, with no Suspense, so the build stores no shell for them and
+  every response reflects the deployment as it is right now. (Next still
+  answers with `x-nextjs-prerender: 1`; with Cache Components every page has
+  a build-time entry, but theirs is empty. `08-unconfigured` checks both.)
 
 ### First run and failures
 - A deployment with no database or `APP_SECRET` must show the checklist at
@@ -121,6 +130,17 @@ tests/                 *.test.ts unit tests; e2e/ browser specs + mock services
   log a token.
 - The owner acts on bookings by id (after `assertOwner()`), not by token.
 
+### Sign-in addresses
+- The owner can have several email addresses (`owner_emails`). Sign-in accepts
+  any **verified** one with the one password; never an unverified one.
+- An address is verified by a six-digit code emailed to it, stored only as an
+  HMAC (`codeHash`), five wrong tries per code. No email provider configured
+  means it stays unverified; do not add another way to verify.
+- `owner.email` is the notifications address (alerts, organiser, reply-to) and
+  must be a verified address. A meeting type's `notify_email` overrides where
+  its alerts go ('' = default). Connected calendar accounts are not sign-in
+  addresses; keep them separate.
+
 ### Scheduling correctness (do not weaken these)
 - The `bookings_no_overlap` exclusion constraint is the last line of defence
   against double-booking, and the `bookings_buffers` trigger is the same for
@@ -144,8 +164,23 @@ tests/                 *.test.ts unit tests; e2e/ browser specs + mock services
 ### Calendar providers
 - Add or change a provider by implementing `CalendarProvider` and registering
   it in `calendars/index.ts`. Screens never import a provider directly.
-- Provider endpoints can be redirected with env vars (`GOOGLE_API_BASE`, …)
-  purely so the e2e mocks can stand in. Keep that working when touching them.
+- Google / Microsoft app credentials come only from env vars
+  (`oauthClientFromEnv`); the admin never asks for them. Without them the
+  Connect button opens the owner-only setup card (`calendars/setup.ts`). The
+  only exception: tokens of accounts connected by older versions are refreshed
+  with the credentials those versions saved in `owner.integrations`.
+- Google scopes stay minimal: `calendar.calendarlist.readonly`,
+  `calendar.freebusy`, `calendar.events` (plus `openid email`). Sign-in always
+  shows the account picker (`prompt=select_account`), so one button adds any
+  number of accounts; an account is matched by its email (a reconnect).
+- New calendars start with "check for conflicts" on; any (non-main) calendar
+  the provider cannot read busy times for is switched off at connect time
+  instead (`switchOffUnreadable`), so it cannot pause booking. Bookings go to
+  the meeting type's own calendar if it can still take them, else the default
+  (`pickBookingCalendar`).
+- Provider endpoints can be redirected with env vars (`GOOGLE_API_BASE`,
+  `ICLOUD_CALDAV_URL`, …) purely so the e2e mocks can stand in. Keep that
+  working when touching them.
 - Credentials are stored encrypted (`encryptJson`) and never sent to the browser.
   Forms treat an empty secret field as "keep what is saved".
 
@@ -167,6 +202,7 @@ tests/                 *.test.ts unit tests; e2e/ browser specs + mock services
 
 ### Tests
 - New scheduling rules get a unit test in `tests/slots.test.ts`; new calendar
-  edge cases in `tests/ics.test.ts`.
+  edge cases in `tests/ics.test.ts`; connect / sign-in address rules in
+  `tests/connect.test.ts`.
 - E2E specs use dates computed from "the first Monday at least six days out"
   (`D.mon`, `D.tue2`, … in `tests/e2e/lib.js`). Never hard-code a date.

@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { connectAccount, oauthClient } from '@/lib/calendars';
 import { googleExchangeCode } from '@/lib/calendars/google';
 import { microsoftExchangeCode } from '@/lib/calendars/microsoft';
+import { oauthRedirectUri } from '@/lib/calendars/setup';
 import { verifySignature } from '@/lib/crypto';
 import { getBaseUrl } from '@/lib/env';
 import { currentOwner } from '@/lib/session';
@@ -41,19 +42,23 @@ export async function GET(request: NextRequest, context: RouteContext<'/api/oaut
     );
   }
   const code = params.get('code');
-  const client = await oauthClient(provider);
+  const client = oauthClient(provider);
   if (!code || !client) return fail('The sign-in did not complete. Please try again.');
 
   try {
-    const redirectUri = `${baseUrl}/api/oauth/${provider}/callback`;
+    const redirectUri = oauthRedirectUri(provider, baseUrl);
     const credentials =
       provider === 'google'
         ? await googleExchangeCode(client, redirectUri, code)
         : await microsoftExchangeCode(client, redirectUri, code);
-    await connectAccount(provider, credentials.email || 'Account', credentials);
+    if (!credentials.email) {
+      return fail('The provider did not say which account this is, so nothing was connected. Please try again.');
+    }
+    // The same account again just refreshes it (a reconnect); another account is added.
+    await connectAccount(provider, credentials.email, credentials);
+    return back(`connected=${encodeURIComponent(credentials.email)}`);
   } catch (err) {
     console.error('[oauth] connect failed:', err);
     return fail(err instanceof Error ? err.message : 'The account could not be connected.');
   }
-  return back('connected=1');
 }

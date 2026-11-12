@@ -30,6 +30,11 @@ export type Answer = { label: string; value: string };
 export type Owner = {
   id: number;
   name: string;
+  /**
+   * The notifications address: where booking alerts go, and the organiser and
+   * reply-to address on calendar entries and emails. Always one of the
+   * verified addresses in owner_emails, which are the ones that can sign in.
+   */
   email: string;
   password_hash: string;
   session_version: number;
@@ -78,6 +83,10 @@ export type EventType = {
   is_active: boolean;
   is_hidden: boolean;
   position: number;
+  /** Calendar new bookings of this type are added to; null means the default one. */
+  calendar_id: string | null;
+  /** Where booking alerts for this type go; '' means the notifications address. */
+  notify_email: string;
   created_at: Date;
 };
 
@@ -119,6 +128,18 @@ export type CalendarRow = {
   check_conflicts: boolean;
   can_write: boolean;
   is_booking_target: boolean;
+  created_at: Date;
+};
+
+/** One of the owner's email addresses. Only verified ones can be used to sign in. */
+export type OwnerEmail = {
+  id: string;
+  email: string;
+  verified_at: Date | null;
+  code_hash: string;
+  code_expires_at: Date | null;
+  code_attempts: number;
+  code_sent_at: Date | null;
   created_at: Date;
 };
 
@@ -165,6 +186,11 @@ export type Booking = {
 
 /** Settings the owner enters in the admin, stored encrypted in owner.integrations. */
 export type Integrations = {
+  /**
+   * Google / Microsoft app credentials saved in the admin by earlier versions.
+   * No longer entered or used for new connections (they come from environment
+   * variables now); only read to keep refreshing accounts connected with them.
+   */
   google?: { clientId: string; clientSecret: string };
   microsoft?: { clientId: string; clientSecret: string; tenant?: string };
   email?: {

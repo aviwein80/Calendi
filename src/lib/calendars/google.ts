@@ -19,25 +19,39 @@ const tokenUrl = () => process.env.GOOGLE_TOKEN_URL ?? 'https://oauth2.googleapi
 const api = () =>
   (process.env.GOOGLE_API_BASE ?? 'https://www.googleapis.com') + '/calendar/v3';
 
+/**
+ * Only what Calendi uses: the account's address (to label the connection),
+ * the list of calendars, busy times, and adding / moving / removing the
+ * events it creates. It never asks to read the contents of other events.
+ */
 export const GOOGLE_SCOPES = [
   'openid',
   'email',
-  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+  'https://www.googleapis.com/auth/calendar.freebusy',
   'https://www.googleapis.com/auth/calendar.events',
 ];
 
-export function googleAuthorizeUrl(client: OAuthClient, redirectUri: string, state: string): string {
+export function googleAuthorizeUrl(
+  client: OAuthClient,
+  redirectUri: string,
+  state: string,
+  loginHint?: string,
+): string {
   const params = new URLSearchParams({
     client_id: client.clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: GOOGLE_SCOPES.join(' '),
-    // "offline" + "consent" is what makes Google hand back a refresh token.
+    // "offline" is what makes Google hand back a refresh token, and it only
+    // does so on the consent screen, so ask for that every time. The account
+    // chooser comes first, which is what lets the same button add a second
+    // or third Google account.
     access_type: 'offline',
-    prompt: 'consent',
-    include_granted_scopes: 'true',
+    prompt: 'select_account consent',
     state,
   });
+  if (loginHint) params.set('login_hint', loginHint);
   return `${authUrl()}?${params}`;
 }
 

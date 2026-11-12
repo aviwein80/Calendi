@@ -2,9 +2,8 @@ import { CircleAlert } from 'lucide-react';
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { connection } from 'next/server';
-import { Suspense } from 'react';
 import { SetupForm } from '@/components/AuthForms';
-import { PublicFrame, PublicSkeleton } from '@/components/PublicFrame';
+import { PublicFrame } from '@/components/PublicFrame';
 import { buttonClass } from '@/components/ui';
 import { MIN_PASSWORD_LENGTH } from '@/lib/constants';
 import { installStatus, type InstallProblem } from '@/lib/install';
@@ -14,22 +13,20 @@ export const metadata: Metadata = { title: 'Set up', robots: { index: false } };
 // First-run setup. Shows what is still missing from the deployment, if
 // anything, and otherwise the form that creates the owner account. Only
 // reachable while no owner account exists.
+//
+// The checks run on every request and nothing here is prerendered: the page
+// has no build-time shell at all (see "Install-state pages" in CLAUDE.md), so
+// what it says is always what is true right now.
+export const instant = false;
 
-export default function SetupPage() {
-  return (
-    <PublicFrame>
-      <Suspense fallback={<PublicSkeleton />}>
-        <Content />
-      </Suspense>
-    </PublicFrame>
-  );
-}
-
-async function Content() {
+export default async function SetupPage() {
   await connection();
   const status = await installStatus();
-  if (!status.ready) return <Checklist problems={status.problems} />;
-  if (status.owner) redirect('/admin/login');
+  if (status.ready && status.owner) redirect('/admin/login');
+  return <PublicFrame>{status.ready ? <AccountForm /> : <Checklist problems={status.problems} />}</PublicFrame>;
+}
+
+function AccountForm() {
   return (
     <div className="fade-in mx-auto w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-7 shadow-sm">
       <h1 className="text-xl font-semibold tracking-tight text-zinc-900">Welcome to Calendi</h1>

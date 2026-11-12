@@ -3,7 +3,7 @@ import { MIN_PASSWORD_LENGTH, MIN_SETUP_TOKEN_LENGTH } from './constants';
 import { hashPassword, secretsMatch, verifyPassword } from './crypto';
 import { pgCode, UNIQUE_VIOLATION } from './db';
 import { isValidZone } from './format';
-import { createOwner, getOwner, insertEventType, insertSchedule, updateOwner } from './store';
+import { createOwner, getOwner, insertEventType, insertSchedule, listVerifiedEmails, updateOwner } from './store';
 import type { Owner } from './types';
 
 // The owner's account: creating it (once, with the setup token) and signing in.
@@ -107,6 +107,7 @@ export async function createAccount(input: SetupInput): Promise<AccountResult> {
     allow_guests: false,
     is_active: true,
     is_hidden: false,
+    notify_email: '',
   });
   return { ok: true, owner };
 }
@@ -122,9 +123,16 @@ export async function signIn(input: { email?: unknown; password?: unknown }): Pr
 
   const email = text(input.email, 200).toLowerCase();
   const password = typeof input.password === 'string' ? input.password.slice(0, 1000) : '';
-  // Always run the password check so timing does not reveal whether the email matched.
+  // Any confirmed address signs in; one that was added but never confirmed does not.
+  const addresses = await listVerifiedEmails();
+  // Always run the password check, and compare against every address, so
+  // timing does not reveal whether (or which) email matched.
   const passwordOk = await verifyPassword(password, owner.password_hash);
-  if (!passwordOk || !secretsMatch(email, owner.email.toLowerCase())) {
+  let emailOk = false;
+  for (const address of addresses) {
+    if (secretsMatch(email, address.toLowerCase())) emailOk = true;
+  }
+  if (!passwordOk || !emailOk) {
     const failed = owner.failed_logins + 1;
     const lock = failed >= MAX_FAILED_LOGINS;
     await updateOwner({

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { isValidRange } from '@/lib/availability/slots';
 import { BookingError, cancelBooking } from '@/lib/bookings';
 import { clearBusyCache, connectAccount, refreshAccountCalendars } from '@/lib/calendars';
-import { CALDAV_PRESETS } from '@/lib/calendars/caldav';
+import { CALDAV_PRESETS, icloudServerUrl } from '@/lib/calendars/caldav';
 import { normalizeIcsUrl } from '@/lib/calendars/ics';
 import { ProviderError } from '@/lib/calendars/types';
 import { MIN_PASSWORD_LENGTH, RESERVED_SLUGS } from '@/lib/constants';
@@ -15,6 +15,7 @@ import { pgCode, UNIQUE_VIOLATION } from '@/lib/db';
 import { emailConfig, sendTestEmail } from '@/lib/email';
 import { getBaseUrl } from '@/lib/env';
 import { isValidZone } from '@/lib/format';
+import { addAddress, confirmAddress, removeAddress, sendCode, setNotificationAddress, validAlertAddress } from '@/lib/ownerEmails';
 import { assertOwner, startSession } from '@/lib/session';
 import {
   deleteCalendarAccount,
@@ -29,11 +30,12 @@ import {
   setBookingTarget,
   setCalendarConflicts,
   setDefaultSchedule,
+  setEventTypeCalendar,
   updateEventType,
   updateOwner,
   updateSchedule,
 } from '@/lib/store';
-import type { Integrations, TimeRange } from '@/lib/types';
+import type { TimeRange } from '@/lib/types';
 import { postWebhook } from '@/lib/webhook';
 
 // Everything the signed-in owner can change. Every action begins by checking
@@ -86,6 +88,7 @@ const eventTypeSchema = z.object({
   allow_guests: z.boolean(),
   is_active: z.boolean(),
   is_hidden: z.boolean(),
+  notify_email: z.string().trim().toLowerCase().max(200),
 });
 
 export async function saveEventTypeAction(id: string | null, input: unknown): Promise<Result> {
@@ -107,6 +110,9 @@ export async function saveEventTypeAction(id: string | null, input: unknown): Pr
     if (question.type !== 'select') question.options = [];
   }
   if (data.schedule_id && !(await getSchedule(data.schedule_id))) data.schedule_id = null;
+  if (!(await validAlertAddress(data.notify_email))) {
+    return { error: 'Booking alerts can only go to one of your confirmed email addresses (Settings → Email addresses).' };
+  }
 
   try {
     if (id) await updateEventType(id, data);
@@ -187,32 +193,41 @@ function providerMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
 }
 
-/** Saves the Google or Microsoft app credentials used for "Connect" buttons. */
-export async function saveOAuthAppAction(_previous: FormState, data: FormData): Promise<FormState> {
+/** "Connect iCloud": the Apple ID and an app-specific password. The calendars are found from there. */
+export async function connectICloudAction(_previous: FormState, data: FormData): Promise<FormState> {
   await assertOwner();
-  const provider = field(data, 'provider');
-  if (provider !== 'google' && provider !== 'microsoft') return { error: 'Unknown provider.' };
-  const clientId = field(data, 'clientId');
-  const clientSecret = field(data, 'clientSecret');
-  if (!clientId || !clientSecret) return { error: 'Enter both the client ID and the client secret.' };
-  const integrations = await getIntegrations();
-  const next: Integrations = {
-    ...integrations,
-    [provider]:
-      provider === 'microsoft'
-        ? { clientId, clientSecret, tenant: field(data, 'tenant') || undefined }
-        : { clientId, clientSecret },
-  };
-  await saveIntegrations(next);
-  refresh();
-  return { ok: 'Saved. You can connect an account now.' };
+  const email = field(data, 'email').toLowerCase();
+  // Apple shows app-specific passwords as xxxx-xxxx-xxxx-xxxx; spaces sneak in when copied.
+  const password = String(data.get('password') ?? '').replace(/\s+/g, '');
+  if (!email || !password) return { error: 'Enter your Apple ID email and the app-specific password.' };
+  try {
+    // The label is what tells one account from another, and matches what
+    // earlier versions saved, so reconnecting updates an existing account.
+    await connectAccount('caldav', `${email} (icloud.com)`, {
+      serverUrl: icloudServerUrl(),
+      username: email,
+      password,
+      service: 'icloud',
+    });
+  } catch (err) {
+    if (err instanceof ProviderError && err.status === 401) {
+      return {
+        error:
+          'Apple did not accept that Apple ID and password. Use an app-specific password (not your normal Apple ID password), and check the email is your Apple ID.',
+      };
+    }
+    return { error: providerMessage(err) };
+  }
+  // Back to the list, which now shows the account (the form closes).
+  redirect(`/admin/calendars?connected=${encodeURIComponent(email)}`);
 }
 
+/** Other CalDAV services (Fastmail, Nextcloud, …), where the server address is needed. */
 export async function connectCalDavAction(_previous: FormState, data: FormData): Promise<FormState> {
   await assertOwner();
   const preset = field(data, 'preset');
   const username = field(data, 'username');
-  const password = String(data.get('password') ?? '').replace(/\s+/g, preset === 'icloud' ? '' : ' ').trim();
+  const password = String(data.get('password') ?? '').replace(/\s+/g, ' ').trim();
   let serverUrl = preset in CALDAV_PRESETS ? CALDAV_PRESETS[preset as keyof typeof CALDAV_PRESETS] : field(data, 'serverUrl');
   if (!username || !password) return { error: 'Enter the username and password.' };
   try {
@@ -226,8 +241,7 @@ export async function connectCalDavAction(_previous: FormState, data: FormData):
   } catch (err) {
     return { error: providerMessage(err) };
   }
-  refresh();
-  return { ok: 'Connected.' };
+  redirect(`/admin/calendars?connected=${encodeURIComponent(username)}`);
 }
 
 export async function connectIcsAction(_previous: FormState, data: FormData): Promise<FormState> {
@@ -239,8 +253,7 @@ export async function connectIcsAction(_previous: FormState, data: FormData): Pr
   } catch (err) {
     return { error: providerMessage(err) };
   }
-  refresh();
-  return { ok: 'Added.' };
+  redirect('/admin/calendars?connected=1');
 }
 
 export async function setCalendarConflictsAction(calendarId: string, check: boolean): Promise<Result> {
@@ -251,9 +264,18 @@ export async function setCalendarConflictsAction(calendarId: string, check: bool
   return {};
 }
 
+/** The default calendar for new bookings (null: none). */
 export async function setBookingTargetAction(calendarId: string | null): Promise<Result> {
   await assertOwner();
   await setBookingTarget(calendarId);
+  refresh();
+  return {};
+}
+
+/** One meeting type's calendar for new bookings (null: the default). */
+export async function setEventTypeCalendarAction(eventTypeId: string, calendarId: string | null): Promise<Result> {
+  await assertOwner();
+  await setEventTypeCalendar(eventTypeId, calendarId);
   refresh();
   return {};
 }
@@ -299,18 +321,15 @@ export async function hostCancelAction(bookingId: string, reason: string): Promi
 export async function saveProfileAction(_previous: FormState, data: FormData): Promise<FormState> {
   await assertOwner();
   const name = field(data, 'name').slice(0, 120);
-  const email = field(data, 'email').toLowerCase().slice(0, 200);
   const timezone = field(data, 'timezone');
   const avatar = field(data, 'avatar_url').slice(0, 500);
   const color = field(data, 'brand_color');
   if (!name) return { error: 'Enter your name.' };
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: 'Enter a valid email address.' };
   if (!isValidZone(timezone)) return { error: 'Choose a time zone.' };
   if (avatar && !/^https:\/\/\S+$/i.test(avatar)) return { error: 'The photo must be a link starting with https://' };
   if (!HEX.test(color)) return { error: 'Choose a colour.' };
   await updateOwner({
     name,
-    email,
     timezone,
     avatar_url: avatar,
     brand_color: color.toLowerCase(),
@@ -318,6 +337,43 @@ export async function saveProfileAction(_previous: FormState, data: FormData): P
   });
   refresh();
   return { ok: 'Saved.' };
+}
+
+// ── Email addresses ──────────────────────────────────────────────────────
+
+export async function addEmailAction(_previous: FormState, data: FormData): Promise<FormState> {
+  const owner = await assertOwner();
+  const result = await addAddress(owner, data.get('email'), await getBaseUrl());
+  refresh();
+  return result;
+}
+
+export async function sendEmailCodeAction(id: string): Promise<Result> {
+  const owner = await assertOwner();
+  const result = await sendCode(owner, id, await getBaseUrl());
+  refresh();
+  return result;
+}
+
+export async function confirmEmailAction(_previous: FormState, data: FormData): Promise<FormState> {
+  await assertOwner();
+  const result = await confirmAddress(field(data, 'id'), field(data, 'code'));
+  if (result.ok) refresh();
+  return result;
+}
+
+export async function removeEmailAction(id: string): Promise<Result> {
+  const owner = await assertOwner();
+  const result = await removeAddress(owner, id);
+  refresh();
+  return result;
+}
+
+export async function setNotificationEmailAction(id: string): Promise<Result> {
+  await assertOwner();
+  const result = await setNotificationAddress(id);
+  refresh();
+  return result;
 }
 
 export async function saveEmailAction(_previous: FormState, data: FormData): Promise<FormState> {
